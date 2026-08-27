@@ -442,7 +442,7 @@ enum Advice {
 
 1. 整个 crate 不存在 `fs::write`、`fs::remove_*`、`fs::rename`、`File::create`、`OpenOptions::write/append/create`。唯一输出是 stdout / stderr。`src/lib.rs` 与 `src/main.rs` 两个独立 crate root 必须以 `forbid(clippy::disallowed_methods)` 锁死该约束；`disallowed_types` 与 `unsafe_code` 因各有唯一合法豁免点，保持 `deny` 并由边界脚本限制豁免位置。非测试代码没有合法 `unwrap()` 豁免，故两根同时 `forbid(clippy::unwrap_used)`。
 2. 无操作日志文件、无缓存文件、无配置文件、无 `completion` 写盘（Q17 / Q20 / Q22）。
-3. **可机械验证的安全属性：正常运行不产生任何文件系统或外部工具写操作。** CI 静态 API 门禁 + 重定向写入位置环境变量的运行时快照 + macOS 15/26 上 `sandbox-exec` 的 `(deny file-write*)` 系统调用级强制，共同验证 §10.2 第 1、2 条。sandbox 门禁必须 fail closed；若目标 runner 不再支持该 deprecated 机制，必须先通过 decision record 重定证据或收窄声明，不得静默删除门禁。
+3. **可机械验证的安全属性：正常运行不产生任何文件系统或外部工具写操作。** CI 静态 API 门禁 + 重定向写入位置环境变量的运行时快照 + macOS 15/26 上 `sandbox-exec` 的 `(deny file-write*)` 系统调用级强制，共同验证 §10.2 第 1、2 条。deny 规则必须携带每次运行唯一的 message token，并由 unified log 实时观察器断言 scan token 的违规记录为零；仅断言 scan 成功或文件未出现不够，因为产品可能吞掉 `EPERM`。START/END 必拒哨兵分别证明观察器已接通、事件已排空。sandbox 门禁必须 fail closed；若目标 runner 不再支持该 deprecated 机制，必须先通过 decision record 重定证据或收窄声明，不得静默删除门禁。该证据不覆盖 sandbox 前已打开的额外 fd，也不覆盖 IPC 请求未沙箱化 daemon 改状态。
 4. **`src/fsx/sys.rs` 是唯一 unsafe 豁免点。** 该模块只导出只读系统调用包装，公开签名不得暴露可写句柄、可变缓冲区、写入 flag 或执行任意系统调用的能力；其他文件不得抑制 `unsafe_code` lint。所有系统调用返回值与 `errno` 必须检查并向上返回，禁止用 `let _ =` 或等价形式丢弃可能表示写尝试或调用失败的结果。两个 crate root 以 `forbid(clippy::let_underscore_must_use, clippy::let_underscore_untyped)` 机械拦截 `let _ = Result` 与未标类型的 raw status；这些 lint **不能**识别写语义，也拦不住显式类型的 raw integer 或裸调用，故只作为契约的局部机械化，不能替代代码审查与运行时证据。模块内部无法由 Clippy 的 Rust API 禁用表证明零写，**其零写保证明确且仅由 §10.2 第 1 条运行时 harness 覆盖**。P1.1 只建立此边界，不实现 `getattrlist`。
 5. 当前 crate **没有 `build.rs`**。build script 是独立 crate；未来若引入，必须同样设置 `forbid(clippy::disallowed_methods)`，纳入 lint suppression 边界与系统调用级零写测试。未同时补齐这些控制前，禁止新增 `build.rs`。
 
@@ -531,7 +531,7 @@ GA runner 记录 fixture benchmark，但**只发布「该 runner image + fixture
 
 **这些是「防止说谎」与「防止副作用」测试，缺一不可。**
 
-1. **零写测试** ★ — HOME、TMPDIR/TMP/TEMP 与 XDG 写入位置全部重定向到 fixture 快照根内；全量 scan 后断言 `--root` 前缀内外均无任何文件被创建、修改或删除（对比前后完整 inode + nlink + mtime + ctime + size + xattr 名称和值快照）。CI 另在 macOS 15/26 以 `(deny file-write*)` sandbox 执行完整 scan，证明任意路径的写尝试会被内核拒绝。
+1. **零写测试** ★ — HOME、TMPDIR/TMP/TEMP 与 XDG 写入位置全部重定向到 fixture 快照根内；全量 scan 后断言 `--root` 前缀内外均无任何文件被创建、修改或删除（对比前后完整 inode + nlink + mtime + ctime + size + xattr 名称和值快照）。另对 `/tmp`、`/var/tmp` 与真实 HOME 下的 `Library/Logs`、`Library/Caches`、`Library/Preferences`、`Library/Application Support` 做浅层新条目兜底；它有意不覆盖既有条目修改或任意绝对路径。CI 在 macOS 15/26 以 `(deny file-write*)` sandbox 执行完整 scan，并用 START/END 日志哨兵断言 scan 的拒绝事件为零，证明产品没有吞掉失败的写尝试。
 2. **副作用上限测试** ★ — 断言每个 probe 的实际外部命令调用次数不超过 side-effect registry 声明值；断言未声明的命令从未被调用。
 3. **APFS 反例测试** — `decisions.md` 附录 B 每个反例各一个测试：clone 双计、resource-fork-only（`allocated=2MiB, private=0`）、HFS 压缩（`ditto -x --hfsCompression` 构造）、hardlink 未完整覆盖时 floor 归零、稀疏文件只解释 logical gap。
 4. **区间边界测试** — 逐条断言 §2.3 的五条边界规则；断言**不存在**任何输入使 `EF_MAY_SHARE_BLOCKS==0 && snapshots==0` 导致区间收敛。
@@ -560,7 +560,7 @@ cargo audit
 #   4. 文档中量化数字均来自 fixture 生成文件（§9.1）
 #   5. 两种架构产物的 Mach-O minimum OS version == macOS 13
 # crate root 强度：lib/bin 均 forbid disallowed_methods；该 lint 在 src/ 内零豁免
-# 系统调用级零写：macOS 15/26 均以 sandbox-exec (deny file-write*) 执行 scan；不可用即失败
+# 系统调用级零写：macOS 15/26 均以 sandbox-exec 执行 scan，并断言唯一 token 的 deny 事件为零；不可用即失败
 ```
 
 矩阵见 §5.3。**支持表由该 workflow 生成，不手写。**

@@ -9,7 +9,7 @@
 |---|---|
 | 产品名 | SizeTrail |
 | 命令 | `sizetrail`（唯一二进制，无短别名） |
-| 决策轮次 | Q0–Q27，全部已消解 |
+| 决策轮次 | Q0–Q28，全部已消解 |
 | 记录日期 | 2026-08-27 |
 | 状态 | frontier 为空，P0 完成，可进入 P1 |
 
@@ -594,6 +594,20 @@ mole 是 **GPL-3.0**，已有 65k star。两点必须遵守：
 - **其他无特权观察器。** EndpointSecurity 需要受限 entitlement、FDA 与特权客户端；FSEvents/kqueue 只能观察部分成功变化；OpenBSM/ktrace 需要特权；App Sandbox 无法兼容任意开发者路径扫描。它们均不能替代本门禁。
 
 影响：`SPEC.md` §8.1、§10.2、§10.3 与 §12；P1.2 同时要求 HOME/TMP/XDG 写入位置重定向和快照 harness，作为 sandbox 之外的可诊断第二证据层。
+
+---
+
+## Q28 — 零写沙箱必须证明“未尝试”，不只证明“未成功”
+
+**决策：macOS 15/26 CI 必须观测并拒绝 scan 期间的任意 `file-write*` Sandbox violation；scan 退出 0 与输出合法不能替代“违规记录为零”。**
+
+P1.2 的 deny-write profile 只阻止写成功。若产品吞掉 `EPERM`，scan 仍可退出 0 并输出合法 JSON，门禁会在用户机器上实际写入的代码存在时误报成功。P1.3 改用带唯一 `(with message "<token>")` 的 deny 规则与无 root 的 unified log 实时观察器：START/END 两个必拒写哨兵分别证明观察器已经接通、scan 事件已经排空；独立 SCAN token 的违规数必须为零。观察器退出、哨兵超时、scan 失败、输出非法或任一 SCAN violation 均 fail closed。
+
+2026-08-27 在 GitHub hosted macOS 15.7.7 与 26.5.2 标准 arm64 runner 实测：吞掉写错误并退出 0 的进程仍产生带 token 的 `deny(1) file-write-create` 事件，真实 SizeTrail scan 为零事件，无需 root。`(with report)` **不能**附于 deny action，两版本均以 `report modifier does not apply to deny action` 拒绝 profile，故不采用。
+
+证据边界：Seatbelt 不追溯限制 sandbox 应用前已经打开的可写 fd；stdout/stderr 是产品明确允许的输出通道。`file-write*` 也不覆盖 IPC 请求未沙箱化 daemon 改状态。两者必须在通道覆盖矩阵中保持未覆盖，不得由本决策扩张声称。
+
+影响：`SPEC.md` §8.1、§10.2、§10.3 与 §12。
 
 ---
 
