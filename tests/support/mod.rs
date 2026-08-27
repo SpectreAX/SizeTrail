@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
@@ -16,10 +16,13 @@ pub struct TreeSnapshot {
 struct SnapshotEntry {
     kind: EntryKind,
     inode: u64,
+    link_count: u64,
     mtime_seconds: i64,
     mtime_nanoseconds: i64,
+    ctime_seconds: i64,
+    ctime_nanoseconds: i64,
     size: u64,
-    xattrs: BTreeSet<OsString>,
+    xattrs: BTreeMap<OsString, Vec<u8>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -54,7 +57,19 @@ fn capture_entry(
     } else {
         EntryKind::Other
     };
-    let xattrs = xattr::list(path)?.collect();
+    let mut xattrs = BTreeMap::new();
+    for name in xattr::list(path)? {
+        let value = xattr::get(path, &name)?.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "xattr disappeared during snapshot: {}",
+                    name.to_string_lossy()
+                ),
+            )
+        })?;
+        xattrs.insert(name, value);
+    }
     let relative = path
         .strip_prefix(root)
         .expect("captured path must remain under the snapshot root")
@@ -65,8 +80,11 @@ fn capture_entry(
         SnapshotEntry {
             kind,
             inode: metadata.ino(),
+            link_count: metadata.nlink(),
             mtime_seconds: metadata.mtime(),
             mtime_nanoseconds: metadata.mtime_nsec(),
+            ctime_seconds: metadata.ctime(),
+            ctime_nanoseconds: metadata.ctime_nsec(),
             size: metadata.size(),
             xattrs,
         },
@@ -114,5 +132,52 @@ impl ReadOnlyFixture {
 
     pub fn snapshot(&self) -> io::Result<TreeSnapshot> {
         TreeSnapshot::capture(&self.snapshot_root)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ReadOnlyFixture, TreeSnapshot};
+    use std::ffi::OsStr;
+    use std::fs;
+
+    #[test]
+    fn snapshot_records_xattr_values() {
+        let fixture = ReadOnlyFixture::create().expect("fixture must be created");
+        let artifact = fixture.home.join("Library/Caches/example/artifact.bin");
+        xattr::set(&artifact, "com.sizetrail.fixture", b"changed")
+            .expect("fixture xattr must be changed");
+
+        let snapshot = fixture.snapshot().expect("snapshot must succeed");
+        let entry = snapshot
+            .entries
+            .get(
+                artifact
+                    .strip_prefix(&fixture.snapshot_root)
+                    .expect("relative path"),
+            )
+            .expect("artifact must be present");
+
+        assert_eq!(
+            entry.xattrs.get(OsStr::new("com.sizetrail.fixture")),
+            Some(&b"changed".to_vec())
+        );
+    }
+
+    #[test]
+    fn snapshot_records_hard_link_count() {
+        let directory = tempfile::tempdir().expect("fixture directory must be created");
+        let artifact = directory.path().join("artifact.bin");
+        fs::write(&artifact, b"fixture").expect("fixture file must be written");
+        fs::hard_link(&artifact, directory.path().join("second.bin"))
+            .expect("hard link must be created");
+
+        let snapshot = TreeSnapshot::capture(&artifact).expect("snapshot must succeed");
+        let entry = snapshot
+            .entries
+            .get(std::path::Path::new(""))
+            .expect("artifact must be present");
+
+        assert_eq!(entry.link_count, 2);
     }
 }
