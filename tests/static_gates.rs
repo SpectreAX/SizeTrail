@@ -245,8 +245,7 @@ fn quantitative_document_gate_rejects_handwritten_number() {
 fn locked_metadata_gate_rejects_a_stale_lockfile() {
     let fixture = TempDir::new().expect("metadata fixture must be created");
     fs::create_dir(fixture.path().join("src")).expect("source directory must be created");
-    fs::write(fixture.path().join("src/lib.rs"), "")
-        .expect("fixture source must be written");
+    fs::write(fixture.path().join("src/lib.rs"), "").expect("fixture source must be written");
     fs::write(
         fixture.path().join("Cargo.toml"),
         "[package]\nname = \"stale-lock\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nserde = \"1\"\n\n[workspace]\n",
@@ -277,11 +276,8 @@ fn generated_document_gate_rejects_a_hand_edited_file() {
         .current_dir(fixture.path())
         .status()
         .expect("fixture repository must initialize");
-    fs::write(
-        fixture.path().join("docs/generated/example.json"),
-        "{}\n",
-    )
-    .expect("baseline generated file must be written");
+    fs::write(fixture.path().join("docs/generated/example.json"), "{}\n")
+        .expect("baseline generated file must be written");
     Command::new("git")
         .args(["add", "docs/generated/example.json"])
         .current_dir(fixture.path())
@@ -294,11 +290,7 @@ fn generated_document_gate_rejects_a_hand_edited_file() {
     .expect("generated file must be mutated");
 
     assert_rejected(
-        run_script(
-            "check-generated-docs.sh",
-            fixture.path(),
-            [] as [&str; 0],
-        ),
+        run_script("check-generated-docs.sh", fixture.path(), [] as [&str; 0]),
         "generated documentation drift gate",
     );
 }
