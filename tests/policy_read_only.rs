@@ -4,12 +4,15 @@ mod support;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use std::process::Command;
-use support::ReadOnlyFixture;
+use support::{HighValueEntrySnapshot, ReadOnlyFixture};
 
 #[test]
 fn scan_does_not_change_the_fixture_inside_or_outside_root() {
     let fixture = ReadOnlyFixture::create().expect("fixture must be created");
     let before = fixture.snapshot().expect("baseline snapshot must succeed");
+    let real_home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let high_value_before = HighValueEntrySnapshot::capture(real_home.as_deref())
+        .expect("high-value baseline must succeed");
 
     cargo_bin_cmd!("sizetrail")
         .args(["scan", "--json", "--root"])
@@ -19,7 +22,13 @@ fn scan_does_not_change_the_fixture_inside_or_outside_root() {
         .success();
 
     let after = fixture.snapshot().expect("final snapshot must succeed");
+    let high_value_after = HighValueEntrySnapshot::capture(real_home.as_deref())
+        .expect("high-value final snapshot must succeed");
     assert_eq!(before, after);
+    assert!(
+        high_value_after.new_entries_since(&high_value_before).is_empty(),
+        "scan created an entry in a high-value real path"
+    );
 }
 
 #[test]
@@ -36,4 +45,23 @@ fn harness_detects_a_home_derived_write() {
 
     let after = fixture.snapshot().expect("final snapshot must succeed");
     assert_ne!(before, after, "HOME-derived mutation escaped the snapshot");
+}
+
+#[test]
+fn high_value_fallback_detects_a_hard_coded_tmp_write() {
+    let before = HighValueEntrySnapshot::capture(None).expect("fallback baseline must succeed");
+    let probe = std::path::PathBuf::from(format!(
+        "/tmp/sizetrail-hard-coded-mutation-{}",
+        std::process::id()
+    ));
+    std::fs::write(&probe, b"mutation").expect("hard-coded mutation must be written");
+
+    let after = HighValueEntrySnapshot::capture(None).expect("fallback final snapshot must succeed");
+    let new_entries = after.new_entries_since(&before);
+    std::fs::remove_file(&probe).expect("hard-coded mutation must be removed");
+
+    assert!(
+        new_entries.contains(&probe),
+        "hard-coded /tmp mutation escaped the fallback snapshot"
+    );
 }

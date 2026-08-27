@@ -115,6 +115,19 @@ fn clippy_disallowed_policy_is_an_exact_reviewed_set() {
 }
 
 #[test]
+fn crate_roots_forbid_disallowed_methods() {
+    for crate_root in ["src/lib.rs", "src/main.rs"] {
+        let source = fs::read_to_string(repository_root().join(crate_root))
+            .expect("crate root must be readable");
+        assert_eq!(
+            source.lines().next(),
+            Some("#![forbid(clippy::disallowed_methods)]"),
+            "{crate_root} must make the zero-write lint impossible to downgrade"
+        );
+    }
+}
+
+#[test]
 fn zero_write_gate_rejects_file_set_times() {
     let fixture = TempDir::new().expect("temporary crate must be created");
     fs::create_dir(fixture.path().join("src")).expect("source directory must be created");
@@ -135,7 +148,7 @@ fn zero_write_gate_rejects_file_set_times() {
     .expect("fixture lockfile must be written");
     fs::write(
         fixture.path().join("src/main.rs"),
-        "#![deny(clippy::disallowed_methods)]\nfn main() {\n    let file = std::fs::File::open(\"artifact.bin\").unwrap();\n    let times = std::fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH);\n    file.set_times(times).unwrap();\n}\n",
+        "#![forbid(clippy::disallowed_methods)]\n#[allow(clippy::disallowed_methods)]\nfn main() {\n    let file = std::fs::File::open(\"artifact.bin\").unwrap();\n    let times = std::fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH);\n    file.set_times(times).unwrap();\n}\n",
     )
     .expect("mutation source must be written");
 
@@ -206,6 +219,44 @@ fn lint_boundary_gate_rejects_all_suppression_forms_outside_policy() {
         ["unsafe_code", "src/fsx/sys.rs", "src", "warnings"],
     );
     assert_rejected(output, "unsafe suppression boundary gate");
+
+    for form in [
+        "#![allow(clippy::disallowed_methods)]\n",
+        "#![expect(clippy::disallowed_methods)]\n",
+        "#![cfg_attr(test, allow(clippy::disallowed_methods))]\n",
+    ] {
+        let fixture = TempDir::new().expect("method boundary fixture must be created");
+        fs::create_dir(fixture.path().join("src")).expect("source directory must be created");
+        fs::write(fixture.path().join("src/scan.rs"), form)
+            .expect("forbidden method suppression must be written");
+
+        let output = run_script(
+            "check-policy-boundary.sh",
+            fixture.path(),
+            ["clippy::disallowed_methods", "-", "src"],
+        );
+        assert_rejected(output, "disallowed-methods suppression boundary gate");
+    }
+}
+
+#[test]
+fn lint_boundary_gate_accepts_no_disallowed_methods_suppression() {
+    let fixture = TempDir::new().expect("method boundary fixture must be created");
+    fs::create_dir(fixture.path().join("src")).expect("source directory must be created");
+    fs::write(fixture.path().join("src/scan.rs"), "pub fn scan() {}\n")
+        .expect("clean source must be written");
+
+    let output = run_script(
+        "check-policy-boundary.sh",
+        fixture.path(),
+        ["clippy::disallowed_methods", "-", "src"],
+    );
+    assert!(
+        output.status.success(),
+        "zero-exemption boundary rejected clean source\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
