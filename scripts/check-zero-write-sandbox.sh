@@ -3,7 +3,10 @@ set -euo pipefail
 
 binary="${1:?usage: check-zero-write-sandbox.sh <sizetrail-binary>}"
 sandbox=/usr/bin/sandbox-exec
-probe_root="$(mktemp -d /tmp/sizetrail-zero-write.XXXXXX)"
+# The probe root must be a physical path: /tmp is a symlink on stock macOS, and the product
+# pins roots to their physical identity. A symlinked probe root would make scan bail out
+# before measuring anything and leave this gate green (Q31, Q32).
+probe_root="$(cd "$(mktemp -d /tmp/sizetrail-zero-write.XXXXXX)" && pwd -P)"
 observer_pid=""
 
 cleanup() {
@@ -84,11 +87,29 @@ if [[ $mutation_status -ne 0 || -e "$probe_root/home/.sizetrail-mutation" ]]; th
 fi
 wait_for_marker "$start_marker"
 
+set +e
 /usr/bin/env "${environment[@]}" "$sandbox" -p "$(profile_for "$scan_marker")" \
   "$binary" scan --json --root "$probe_root/home" \
-  >"$probe_root/scan.json"
+  >"$probe_root/scan.json" 2>"$probe_root/scan.stderr"
+scan_status=$?
+set -e
+
+if [[ $scan_status -ne 0 ]]; then
+  echo "scan exited $scan_status under the deny-write sandbox" >&2
+  cat "$probe_root/scan.stderr" >&2
+  exit 1
+fi
 
 grep -q '"schema_version":"0.1.0-unstable"' "$probe_root/scan.json"
+
+# A gate that only proves "nothing failed" is not a gate (§9.0). Assert the measurement
+# actually ran: a regression that makes root initialization fail everywhere would otherwise
+# keep this check green while proving nothing about the read path.
+if ! grep -q '"regions":\[{"id":"capacity","status":"complete"}\]' "$probe_root/scan.json"; then
+  echo "scan produced no completed capacity measurement under the sandbox" >&2
+  cat "$probe_root/scan.json" >&2
+  exit 1
+fi
 
 set +e
 /usr/bin/env "${environment[@]}" "$sandbox" -p "$(profile_for "$end_marker")" \

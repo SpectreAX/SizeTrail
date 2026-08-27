@@ -47,8 +47,50 @@ pub enum CapacityValue {
     },
     Unmeasurable {
         kind: CapacityKind,
-        reason: &'static str,
+        reason: UnmeasurableReason,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnmeasurableReason {
+    NotNormalizedAbsolute,
+    CloudRootExcluded,
+    ReadPolicyVerificationFailed,
+    RootPathUnresolvable,
+    RootPathNotEncodable,
+    RootIdentityUnavailable,
+    SymlinkTraversalRejected,
+    VolumeCapacityQueryFailed,
+    SharedContainerCapabilityUnavailable,
+    CapacityArithmeticOverflowed,
+    CoreFoundationCapacityUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RootError {
+    NotNormalizedAbsolute,
+    CloudRootExcluded,
+    ReadPolicyVerificationFailed,
+    PathUnresolvable,
+    PathNotEncodable,
+    IdentityUnavailable,
+    SymlinkTraversalRejected,
+}
+
+impl RootError {
+    #[must_use]
+    pub const fn reason(self) -> UnmeasurableReason {
+        match self {
+            Self::NotNormalizedAbsolute => UnmeasurableReason::NotNormalizedAbsolute,
+            Self::CloudRootExcluded => UnmeasurableReason::CloudRootExcluded,
+            Self::ReadPolicyVerificationFailed => UnmeasurableReason::ReadPolicyVerificationFailed,
+            Self::PathUnresolvable => UnmeasurableReason::RootPathUnresolvable,
+            Self::PathNotEncodable => UnmeasurableReason::RootPathNotEncodable,
+            Self::IdentityUnavailable => UnmeasurableReason::RootIdentityUnavailable,
+            Self::SymlinkTraversalRejected => UnmeasurableReason::SymlinkTraversalRejected,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -74,21 +116,27 @@ pub struct Root {
 }
 
 impl Root {
-    pub fn open(path: &Path) -> io::Result<Self> {
-        require_normalized_absolute(path)?;
-        reject_cloud_root(path)?;
+    /// Opens a root, pinning it to its physical path and volume identity.
+    ///
+    /// The step order is a contract, not an implementation detail: canonicalization is a
+    /// metadata call that can materialize dataless files, so it must never precede I/O
+    /// policy verification.
+    pub fn open(path: &Path) -> Result<Self, RootError> {
+        if !is_normalized_absolute(path) {
+            return Err(RootError::NotNormalizedAbsolute);
+        }
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        reject_cloud_root(path, home.as_deref())?;
+
         initialize_root(sys::install_read_policies, || {
-            let path_c = path_to_c_string(path)?;
-            Ok((
-                path_c.clone(),
-                sys::volume(&path_c).ok(),
-                sys::identity(&path_c)?,
-            ))
-        })
-        .and_then(|(path_c, volume, raw)| {
-            let identity = identity(&raw)?;
+            let physical = std::fs::canonicalize(path).map_err(|_| RootError::PathUnresolvable)?;
+            reject_cloud_root(&physical, home.as_deref())?;
+            let path_c = path_to_c_string(&physical).map_err(|_| RootError::PathNotEncodable)?;
+            let volume = sys::volume(&path_c).ok();
+            let raw = sys::identity(&path_c).map_err(classify_probe_error)?;
+            let identity = identity(&raw).map_err(|_| RootError::IdentityUnavailable)?;
             Ok(Self {
-                path: path.to_path_buf(),
+                path: physical,
                 path_c,
                 identity,
                 volume,
@@ -99,6 +147,12 @@ impl Root {
     #[must_use]
     pub const fn identity(&self) -> FileIdentity {
         self.identity
+    }
+
+    /// The physical path this root is pinned to, with every symlink already resolved.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     pub fn measure_object(&self, path: &Path) -> io::Result<ObjectMeasurements> {
@@ -187,7 +241,7 @@ fn capacity_values(
         } else {
             CapacityValue::Unmeasurable {
                 kind,
-                reason: "capacity arithmetic overflowed",
+                reason: UnmeasurableReason::CapacityArithmeticOverflowed,
             }
         }
     };
@@ -204,7 +258,7 @@ fn capacity_values(
                 .map_or(
                     CapacityValue::Unmeasurable {
                         kind: CapacityKind::ContainerAllocated,
-                        reason: "statfs container arithmetic overflowed",
+                        reason: UnmeasurableReason::CapacityArithmeticOverflowed,
                     },
                     |bytes| CapacityValue::Measured {
                         kind: CapacityKind::ContainerAllocated,
@@ -215,7 +269,7 @@ fn capacity_values(
         } else {
             CapacityValue::Unmeasurable {
                 kind: CapacityKind::ContainerAllocated,
-                reason: "volume does not report valid shared-container capability",
+                reason: UnmeasurableReason::SharedContainerCapabilityUnavailable,
             }
         },
         measured_or(
@@ -256,7 +310,7 @@ fn capacity_values(
         important.map_or(
             CapacityValue::Unmeasurable {
                 kind: CapacityKind::AvailableImportant,
-                reason: "CoreFoundation important-usage capacity was unavailable",
+                reason: UnmeasurableReason::CoreFoundationCapacityUnavailable,
             },
             |bytes| CapacityValue::Measured {
                 kind: CapacityKind::AvailableImportant,
@@ -267,7 +321,7 @@ fn capacity_values(
         opportunistic.map_or(
             CapacityValue::Unmeasurable {
                 kind: CapacityKind::AvailableOpportunistic,
-                reason: "CoreFoundation opportunistic-usage capacity was unavailable",
+                reason: UnmeasurableReason::CoreFoundationCapacityUnavailable,
             },
             |bytes| CapacityValue::Measured {
                 kind: CapacityKind::AvailableOpportunistic,
@@ -280,10 +334,20 @@ fn capacity_values(
 
 fn initialize_root<T>(
     install_policies: impl FnOnce() -> io::Result<()>,
-    probe: impl FnOnce() -> io::Result<T>,
-) -> io::Result<T> {
-    install_policies()?;
+    probe: impl FnOnce() -> Result<T, RootError>,
+) -> Result<T, RootError> {
+    install_policies().map_err(|_| RootError::ReadPolicyVerificationFailed)?;
     probe()
+}
+
+const ELOOP: i32 = 62;
+
+fn classify_probe_error(error: io::Error) -> RootError {
+    if error.raw_os_error() == Some(ELOOP) {
+        RootError::SymlinkTraversalRejected
+    } else {
+        RootError::PathUnresolvable
+    }
 }
 
 fn enforce_mount_boundary(root: FileIdentity, object: FileIdentity) -> io::Result<()> {
@@ -333,12 +397,15 @@ fn path_to_c_string(path: &Path) -> io::Result<CString> {
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains a NUL byte"))
 }
 
-fn require_normalized_absolute(path: &Path) -> io::Result<()> {
-    if path.is_absolute()
+fn is_normalized_absolute(path: &Path) -> bool {
+    path.is_absolute()
         && !path
             .components()
             .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
-    {
+}
+
+fn require_normalized_absolute(path: &Path) -> io::Result<()> {
+    if is_normalized_absolute(path) {
         Ok(())
     } else {
         Err(io::Error::new(
@@ -348,8 +415,10 @@ fn require_normalized_absolute(path: &Path) -> io::Result<()> {
     }
 }
 
-fn reject_cloud_root(path: &Path) -> io::Result<()> {
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+/// Rejects cloud and File Provider roots. Called twice per open: once on the given spelling
+/// before any filesystem call, and again on the physical path so a symlink cannot lead in.
+fn reject_cloud_root(path: &Path, home: Option<&Path>) -> Result<(), RootError> {
+    let Some(home) = home else {
         return Ok(());
     };
     for cloud in [
@@ -357,10 +426,7 @@ fn reject_cloud_root(path: &Path) -> io::Result<()> {
         home.join("Library/CloudStorage"),
     ] {
         if path.starts_with(cloud) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Cloud and File Provider roots are permanently excluded",
-            ));
+            return Err(RootError::CloudRootExcluded);
         }
     }
     Ok(())

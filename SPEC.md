@@ -210,6 +210,21 @@ enum Scope { Object, Inode, Volume }
 - 设置或验证失败 → 整个相关 root 记为 `unknown`，不继续探测。
 - `EDEADLK` 同样记为 `unknown`。
 - **Cloud / File Provider roots 永久排除**，不进入任何外部工具调用。
+- **IOPOL 验证失败必须在 JSON 上与路径类失败可区分（Q33）。** 折叠成单一原因字符串等于让红线 6 不可审计。
+
+### 3.2.1 root 路径策略（Q32）
+
+`Root::open` 的固定顺序，**顺序本身是约束**：
+
+1. 给定路径做纯文本检查：绝对、无 `.` / `..`、非 cloud 前缀（不触碰文件系统）。
+2. 设置并验证 I/O policy。
+3. **规范化 root 一次** —— `fs::canonicalize` 是元数据调用，可能触发 materialization，因此**必须**在第 2 步之后。
+4. 按物理路径重做 cloud 前缀检查（防 symlink 指入 `CloudStorage`）。
+5. 取物理 fsid/fileid 作为 root 身份。
+
+规范化后同时保留给定路径与物理路径。**cloud 排除与 mount/firmlink 边界一律以物理路径与真实 fsid 判定；`measure_object` 的前缀检查是物理前缀，不是文本前缀。**
+
+**root 以下的遍历继续使用 `FSOPT_NOFOLLOW_ANY`。** 不得对 root 自身施加 —— 那会使 `/tmp` 与 `$TMPDIR`（macOS 上均经 symlink）不可用，而它保护的只是 root 的命名方式，不是遍历期的逃逸面。
 
 ### 3.3 SIP
 
@@ -507,6 +522,18 @@ enum Advice {
 2. **数字来源断言**：文档中每个公开量化数字必须来自 fixture 生成的文件。
 3. **coverage/unknown 基线**：每次发布生成并保存基线。
 
+### 9.0 门禁有效性（Q31，适用于本规格所有门禁）
+
+**任何用于证明某能力的门禁，必须同时断言该能力确实执行了。只断言「没有失败」的门禁视为无效门禁。**
+
+只读产品的正常行为就是「什么都不做」，因此「什么都没发生」与「什么都没执行」在退出码上不可区分 —— 这使 fail-open 成为本项目门禁的**主要**失效模式，而非边缘情况。P2 审计一次性发现三处同型缺陷（沙箱 probe root 因 symlink 被拒、沙箱不断言已测量、反例构造失败静默 skip）。
+
+派生规则：
+
+- 构造失败一律 **fail closed**。例外只能进入代码内的窄允许清单，并由锁定测试保证清单变更可见。
+- `--nocapture` 保留诊断输出**不构成**证据 —— 绿色状态是唯一会被读取的信号。
+- 每个新门禁必须回答：什么情况下它会在能力未执行时保持绿色？答案必须是「没有」。
+
 P4 编写 README 与公开文档时，数字来源断言只能按以下方向演进：对版本号、章节号、日期建立**窄允许清单**；fixture 生成片段按显式标记转写并逐字节比对。**未经 decision record 直接放宽或绕过该检查，即为 truth contract 失效。** P1.1 仅记录此约束，不提前实现 transclusion。
 
 ### 9.2 禁用的声明模式（非穷尽）
@@ -551,7 +578,7 @@ GA runner 记录 fixture benchmark，但**只发布「该 runner image + fixture
 
 1. **零写测试** ★ — HOME、TMPDIR/TMP/TEMP 与 XDG 写入位置全部重定向到 fixture 快照根内；全量 scan 后断言 `--root` 前缀内外均无任何文件被创建、修改或删除（对比前后完整 inode + nlink + mtime + ctime + size + xattr 名称和值快照）。另对 `/tmp`、`/var/tmp` 与真实 HOME 下的 `Library/Logs`、`Library/Caches`、`Library/Preferences`、`Library/Application Support` 做浅层新条目兜底；它有意不覆盖既有条目修改或任意绝对路径。CI 在 macOS 15/26 以 `(deny file-write*)` sandbox 执行完整 scan，并用 START/END 日志哨兵断言 scan 的拒绝事件为零，证明产品没有吞掉失败的写尝试。
 2. **副作用上限测试** ★ — 断言每个 probe 的实际外部命令调用次数不超过 side-effect registry 声明值；断言未声明的命令从未被调用。
-3. **APFS 反例测试** — `decisions.md` 附录 B 每个反例各一个测试：clone 双计、resource-fork-only（`allocated=2MiB, private=0`）、HFS 压缩（先创建 CPIO，再以 `ditto -x --hfsCompression` 构造）、hardlink 未完整覆盖时 floor 归零、稀疏文件只解释 logical gap。构造失败不得静默 skip：测试必须打印 `SIZETRAIL_P2_COVERAGE_GAP` 及 fixture id/原因，CI 以 `--nocapture` 保留报告；对应 runner 在获得真机证据前只能记为覆盖缺口，不能由绿色状态暗示已验证。
+3. **APFS 反例测试** — `decisions.md` 附录 B 每个反例各一个测试：clone 双计、resource-fork-only（`allocated=2MiB, private=0`）、HFS 压缩（先创建 CPIO，再以 `ditto -x --hfsCompression` 构造）、hardlink 未完整覆盖时 floor 归零、稀疏文件只解释 logical gap。**构造失败一律 fail closed（Q31）** —— 测试必须失败，不得打印标记后 `return`。若某 runner 确实无法构造某反例，只能把该 fixture id 加入代码内的窄允许清单，并由锁定测试使清单变更可见；`--nocapture` 保留诊断输出不构成证据。
 4. **区间边界测试** — 逐条断言 §2.3 的五条边界规则；断言**不存在**任何输入使 `EF_MAY_SHARE_BLOCKS==0 && snapshots==0` 导致区间收敛。
 5. **信号不可加测试** — 断言信号字节永不参与求和；断言任何负信号组合都不令区间收敛；断言 `unexplained_private_gap` 始终存在于输出类型中。
 6. **JSON 确定性测试** — 同一 fixture 多次运行的 `payload` **逐字节相同**；`environment` 使用固定注入值（**不允许事后正则清洗**）；adapter 到达顺序变化不影响 payload。
@@ -579,6 +606,8 @@ cargo audit
 #   5. 两种架构产物的 Mach-O minimum OS version == macOS 13
 # crate root 强度：lib/bin 均 forbid disallowed_methods；该 lint 在 src/ 内零豁免
 # 系统调用级零写：macOS 15/26 均以 sandbox-exec 执行 scan，并断言唯一 token 的 deny 事件为零；不可用即失败
+#   该门禁必须额外断言 scan 实际完成了测量（§9.0）：probe root 取物理路径，
+#   且断言 capacity region 为 complete。否则 root 初始化普遍失败时门禁仍会全绿。
 ```
 
 矩阵见 §5.3。**支持表由该 workflow 生成，不手写。**

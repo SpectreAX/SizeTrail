@@ -10,14 +10,13 @@ use sizetrail::model::{
 #[test]
 fn adapter_free_scan_emits_a_complete_json_document() {
     let fixture = tempfile::tempdir().expect("scan root must be created");
-    let root = std::fs::canonicalize(fixture.path()).expect("root must have a physical path");
     let output = cargo_bin_cmd!("sizetrail")
         .args(["scan", "--json", "--root"])
-        .arg(root)
+        .arg(fixture.path())
         .output()
         .expect("scan must run");
 
-    assert!(matches!(output.status.code(), Some(0 | 3)));
+    assert_eq!(output.status.code(), Some(0));
     let document: Value = serde_json::from_slice(&output.stdout).expect("stdout must be JSON");
 
     assert_eq!(document["schema_version"], "0.1.0-unstable");
@@ -35,10 +34,9 @@ fn adapter_free_scan_emits_a_complete_json_document() {
 #[test]
 fn every_measured_capacity_number_carries_its_basis() {
     let fixture = tempfile::tempdir().expect("scan root must be created");
-    let root = std::fs::canonicalize(fixture.path()).expect("root must have a physical path");
     let output = cargo_bin_cmd!("sizetrail")
         .args(["scan", "--json", "--root"])
-        .arg(root)
+        .arg(fixture.path())
         .output()
         .expect("scan must run");
     let document: Value = serde_json::from_slice(&output.stdout).expect("stdout must be JSON");

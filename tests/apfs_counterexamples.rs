@@ -26,8 +26,23 @@ fn command(program: &str, arguments: &[&Path]) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-fn report_gap(fixture: &str, detail: &str) {
+/// Fixtures whose construction is allowed to be unavailable on the running host.
+///
+/// These counterexamples are the whole empirical basis for the non-convergence rule, so a
+/// construction failure fails the test by default (Q31). Adding an id here is a reviewed
+/// exception, and `static_gates` locks this list so the change cannot pass unnoticed.
+const CONSTRUCTION_EXCEPTIONS: &[&str] = &[];
+
+/// Fails closed unless `fixture` is an accepted exception. Returns whether the caller should
+/// skip the remaining assertions.
+#[must_use]
+fn construction_failure_is_accepted(fixture: &str, detail: &str) -> bool {
+    assert!(
+        CONSTRUCTION_EXCEPTIONS.contains(&fixture),
+        "SIZETRAIL_P2_COVERAGE_GAP fixture={fixture} detail={detail}"
+    );
     eprintln!("SIZETRAIL_P2_COVERAGE_GAP fixture={fixture} detail={detail}");
+    true
 }
 
 #[test]
@@ -38,8 +53,9 @@ fn clone_allocated_footprints_are_counted_per_directory_entry() {
         .expect("clone source has a parent")
         .join("clone-copy.bin");
     fs::write(&original, vec![0x5a; 20 * MIB]).expect("clone source must be written");
-    if !command("/bin/cp", &[Path::new("-c"), &original, &clone]) {
-        report_gap("clone", "cp -c could not construct an APFS clone");
+    if !command("/bin/cp", &[Path::new("-c"), &original, &clone])
+        && construction_failure_is_accepted("clone", "cp -c could not construct an APFS clone")
+    {
         return;
     }
 
@@ -114,11 +130,12 @@ fn hfs_compression_keeps_the_private_floor_uninformative() {
                 &output,
             ],
         );
-    if !unpacked {
-        report_gap(
+    if !unpacked
+        && construction_failure_is_accepted(
             "hfs_compression",
             "CPIO plus ditto --hfsCompression construction was unavailable",
-        );
+        )
+    {
         return;
     }
 
@@ -127,11 +144,12 @@ fn hfs_compression_keeps_the_private_floor_uninformative() {
         .expect("APFS root must initialize")
         .measure_object(&sample)
         .expect("compressed file must be measurable");
-    if measured.private_bytes != Some(0) {
-        report_gap(
+    if measured.private_bytes != Some(0)
+        && construction_failure_is_accepted(
             "hfs_compression",
             "runner filesystem did not preserve HFS compression",
-        );
+        )
+    {
         return;
     }
     assert!(measured.allocated_bytes.is_some_and(|bytes| bytes > 0));

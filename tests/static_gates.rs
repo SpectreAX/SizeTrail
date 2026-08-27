@@ -466,17 +466,28 @@ fn minimum_macos_gate_rejects_newer_deployment_target() {
     assert_rejected(output, "minimum macOS gate");
 }
 
+/// A document that satisfies every other sandbox assertion, so a negative fixture built on it
+/// can only be rejected for the one property under test.
+const COMPLETE_ENOUGH_DOCUMENT: &str = r#"{"schema_version":"0.1.0-unstable","payload":{"regions":[{"id":"capacity","status":"complete"}]}}"#;
+
+fn write_fake_binary(directory: &Path, name: &str, body: &str) -> PathBuf {
+    let binary = directory.join(name);
+    fs::write(&binary, body).expect("fake binary must be written");
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))
+        .expect("fake binary must be executable");
+    binary
+}
+
 #[test]
 fn sandbox_gate_rejects_a_swallowed_hard_coded_write() {
     let fixture = TempDir::new().expect("sandbox fixture must be created");
-    let fake_binary = fixture.path().join("sizetrail-mutation");
-    fs::write(
-        &fake_binary,
-        "#!/bin/sh\n: > /tmp/sizetrail-smuggled-sandbox-probe 2>/dev/null || true\nprintf '{\"schema_version\":\"0.1.0-unstable\"}\\n'\nexit 0\n",
-    )
-    .expect("mutation binary must be written");
-    fs::set_permissions(&fake_binary, fs::Permissions::from_mode(0o755))
-        .expect("mutation binary must be executable");
+    let fake_binary = write_fake_binary(
+        fixture.path(),
+        "sizetrail-mutation",
+        &format!(
+            "#!/bin/sh\n: > /tmp/sizetrail-smuggled-sandbox-probe 2>/dev/null || true\nprintf '%s\\n' '{COMPLETE_ENOUGH_DOCUMENT}'\nexit 0\n"
+        ),
+    );
 
     assert_rejected(
         run_script(
@@ -485,5 +496,36 @@ fn sandbox_gate_rejects_a_swallowed_hard_coded_write() {
             [fake_binary.as_os_str()],
         ),
         "sandbox write-attempt gate",
+    );
+}
+
+#[test]
+fn sandbox_gate_rejects_a_scan_that_measured_nothing() {
+    let fixture = TempDir::new().expect("sandbox fixture must be created");
+    let fake_binary = write_fake_binary(
+        fixture.path(),
+        "sizetrail-idle",
+        "#!/bin/sh\nprintf '%s\\n' '{\"schema_version\":\"0.1.0-unstable\",\"payload\":{\"regions\":[{\"id\":\"capacity\",\"status\":\"unmeasurable\"}]}}'\nexit 0\n",
+    );
+
+    assert_rejected(
+        run_script(
+            "check-zero-write-sandbox.sh",
+            fixture.path(),
+            [fake_binary.as_os_str()],
+        ),
+        "sandbox measurement-liveness gate",
+    );
+}
+
+#[test]
+fn apfs_counterexample_construction_exceptions_stay_empty() {
+    let source = fs::read_to_string(repository_root().join("tests/apfs_counterexamples.rs"))
+        .expect("counterexample tests must be readable");
+
+    assert!(
+        source.contains("const CONSTRUCTION_EXCEPTIONS: &[&str] = &[];"),
+        "a counterexample construction exception was added; every entry silently removes \
+         empirical evidence for the non-convergence rule and needs a decision record"
     );
 }

@@ -641,6 +641,67 @@ Q9 选择双 adapter 时，唯一的比较依据是人周估算。P1 连同 P1.1
 
 ---
 
+## Q31 — 门禁必须断言能力已执行，而非仅断言未失败
+
+**决策：任何用于证明某能力的门禁，必须同时断言该能力确实执行了。只断言「没有失败」的门禁视为无效门禁。反例构造失败一律 fail closed；例外只能进入代码内的窄允许清单，并由锁定测试保证清单变更可见。**
+
+P2 审计发现三处同型缺陷，全部是「门禁保持绿色，而它本该检验的能力静默没有执行」：
+
+1. 零写沙箱门禁的 probe root 取自 `mktemp -d /tmp/...`，而 `/tmp` 是指向 `/private/tmp` 的 symlink，`FSOPT_NOFOLLOW_ANY` 因此 `ELOOP`。scan 退出 3，脚本在 `set -e` 下被这个退出码杀掉且无任何诊断输出。
+2. 即便 probe root 可用，该门禁也只断言退出码为 0 与 `schema_version` 存在，**从不断言 scan 真的测量了任何东西**。任何让 root 初始化普遍失败的回归都会以全绿通过 §8.1 强声明。
+3. APFS 反例测试在构造失败时打印 `SIZETRAIL_P2_COVERAGE_GAP` 后 `return`，测试判定为 PASS。这些反例是「区间不得收敛」的全部经验基础。
+
+三者的共同点不是疏忽，而是**门禁的成功条件被写成了「没有观察到失败」**。在只读产品里这尤其危险：产品的正常行为就是「什么都不做」，因此「什么都没发生」与「什么都没执行」在退出码上不可区分。
+
+P1.1–P1.3 修掉的多数缺口也属此类（`expect` 绕过、`deny` 可降级、沙箱只证明未成功而非未尝试）。因此本条上升为常设规格条款，不再逐个打补丁。
+
+`--nocapture` 保留诊断输出**不构成**证据：绿色状态是唯一会被读取的信号，没人审阅通过运行的 stdout。原 `SPEC.md` §10.2.3 一面要求打印标记、一面声称「不能由绿色状态暗示已验证」，这两句自相矛盾，以本条为准。
+
+被否：只修三处具体缺陷而不立通用条款（同型缺陷会在 P3/P4 随新门禁重新出现）；保留 print-and-continue 并依赖人工审阅日志；用环境变量在 CI 上放宽反例要求（放宽会成为默认路径）。
+
+影响：`SPEC.md` §9.1 新增门禁有效性条款、§10.2.3 改为 fail closed、§10.3 沙箱门禁必须断言已测量。
+
+---
+
+## Q32 — root 在 `open` 时规范化一次
+
+**决策：`Root::open` 在验证 I/O policy 之后对 root 规范化一次，同时保留给定路径与物理路径；cloud 排除与 mount/firmlink 边界一律以物理路径与真实 fsid 判定；root 以下的遍历继续使用 `FSOPT_NOFOLLOW_ANY`。**
+
+原实现对 root 自身也施加 `FSOPT_NOFOLLOW_ANY`，导致任何经由 symlink 祖先到达的 root 被拒。实测（macOS 27，本机）：
+
+| root | 结果 |
+|---|---|
+| `/tmp/...`（`/tmp` → `/private/tmp`） | 拒绝 |
+| `$TMPDIR`（`/var/folders/...`，`/var` → `/private/var`） | 拒绝 |
+| `/private/tmp/...` | 接受 |
+| `$HOME`、`/Users/Shared` | 接受 |
+
+即 macOS 上两个标准临时目录位置全部不可用。测试套件未暴露此问题，因为 `tests/apfs_counterexamples.rs` 在构造 fixture 后先调用了 `fs::canonicalize`；零写沙箱门禁没有这样做，于是长期是红的。
+
+对**永久只读**产品而言，symlink 的风险是遍历期逃逸到 root 之外，而不是 root 自身如何被命名。规范化一次即可把逃逸判定建立在物理身份上，严格性不降反升：`measure_object` 的前缀检查从文本前缀变为物理前缀。这也与既有的「firmlink 按真实卷身份处理」一致。
+
+**顺序是硬约束：** `fs::canonicalize` 是元数据调用，可能触发 materialization，因此必须排在 `IOPOL_MATERIALIZE_DATALESS_FILES_OFF` 设置并验证**之后**。cloud 前缀检查在规范化前按给定路径做一次（纯文本，不触碰文件系统），规范化后按物理路径再做一次，防止 symlink 指入 `CloudStorage`。
+
+被否：保留对 root 的 `NOFOLLOW_ANY`（使 `--root` 在标准临时目录不可用，且只保护了命名方式而非遍历）；在门禁脚本里绕过而不改产品（真实用户的 `--root /tmp/x` 仍会失败）；在规范化后放弃 root 以下的 `NOFOLLOW_ANY`（那才是真正的逃逸面）。
+
+影响：`SPEC.md` §3.2 顺序约束与新增 root 路径策略；`src/fsx/mod.rs`；`scripts/check-zero-write-sandbox.sh`。
+
+---
+
+## Q33 — root 失败原因必须 typed
+
+**决策：`Root::open` 返回 typed 错误，capacity 的 `unmeasurable` 原因随之 typed 并进入 JSON。`IOPOL` 验证失败必须与路径类失败在输出上可区分。**
+
+原实现把所有 root 失败折叠成单一字符串 `"root initialization or read-policy verification failed"`。后果是**无法从 JSON 判断 materialization 闸门是否失败过** —— 而红线 6 要求 IOPOL 失败时整个 root 记 unknown，这条要求若在输出上不可验证，就只是一句无法审计的声明。它同时让用户对 `--root` 路径问题只能得到不可行动的错误。
+
+最小原因集：`read_policy_verification_failed`（红线 6，必须独立）、`root_path_unresolvable`、`root_path_not_encodable`、`cloud_root_excluded`、`root_identity_unavailable`、`symlink_traversal_rejected`、`not_normalized_absolute`。capacity 内部原因（`volume_capacity_query_failed`、`shared_container_capability_unavailable`、`capacity_arithmetic_overflowed`、`core_foundation_capacity_unavailable`）同时 typed，避免 typed 与字符串混用。
+
+被否：保留单一字符串并靠 stderr 区分（stderr 只作人类诊断，不是机器契约）；只在人类文本模式区分。
+
+影响：`SPEC.md` §3.2；`src/fsx/mod.rs`、`src/capacity.rs`、`src/model.rs`。
+
+---
+
 ## 附录 A — 实测环境基线
 
 采集于 2026-08-26，作为规则表量级参考与回归基线：

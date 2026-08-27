@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::fsx::{CapacityKind, CapacityValue, Root};
+use crate::fsx::{CapacityKind, CapacityValue, Root, UnmeasurableReason};
 use crate::model::RegionStatus;
 
 #[derive(Debug)]
@@ -10,8 +10,9 @@ pub struct CapacityReport {
 }
 
 pub fn measure(root: &Path) -> CapacityReport {
-    let Ok(root) = Root::open(root) else {
-        return unknown_report("root initialization or read-policy verification failed");
+    let root = match Root::open(root) {
+        Ok(root) => root,
+        Err(error) => return unknown_report(error.reason()),
     };
     match root.capacity() {
         Ok(values) => CapacityReport {
@@ -25,11 +26,11 @@ pub fn measure(root: &Path) -> CapacityReport {
             },
             values,
         },
-        Err(_) => unknown_report("volume capacity query failed"),
+        Err(_) => unknown_report(UnmeasurableReason::VolumeCapacityQueryFailed),
     }
 }
 
-fn unknown_report(reason: &'static str) -> CapacityReport {
+fn unknown_report(reason: UnmeasurableReason) -> CapacityReport {
     CapacityReport {
         status: RegionStatus::Unmeasurable,
         values: [
