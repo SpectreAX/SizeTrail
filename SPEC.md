@@ -697,7 +697,7 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | `CFURLCreateFromFileSystemRepresentation` | 同上 | 是 | 是 | — | capacity fixture；仅创建内存 URL |
 | `CFURLCopyResourcePropertyForKey` | 同上 | 是 | 是（只覆盖调用进程写） | — | important/opportunistic fixture；未沙箱化 daemon 的状态变化 **未覆盖** |
 | `CFNumberGetValue` | 同上 | 是 | 是 | — | capacity fixture、类型/负值检查 |
-| `CFRelease` | 同上 | 是 | 是 | — | 所有所有权分支显式释放 |
+| `CFRelease` | 同上 | 是 | 是 | — | 所有权分支均显式释放 |
 | 两个 CoreFoundation capacity key | 同上 | 是 | 不适用 | — | extern static 同样进入精确集合 |
 | File Provider materialization | — | — | 只覆盖调用进程写 | — | `MATERIALIZE_DATALESS_FILES_OFF` set+get；失败不探测，`SF_DATALESS` 标注并跳过；daemon 侧后果 **未被 sandbox 观测** |
 | atime / 读诱发 metadata 写 | — | — | 是 | — | `VFS_ATIME_UPDATES_OFF` set+get |
