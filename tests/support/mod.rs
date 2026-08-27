@@ -115,6 +115,16 @@ impl ReadOnlyFixture {
         let cache = home.join("Library/Caches/example");
 
         fs::create_dir_all(&cache)?;
+        for relative in [
+            "tmp",
+            "xdg/cache",
+            "xdg/config",
+            "xdg/data",
+            "xdg/state",
+            "xdg/runtime",
+        ] {
+            fs::create_dir_all(snapshot_root.join(relative))?;
+        }
         fs::write(cache.join("artifact.bin"), b"fixture")?;
         fs::write(snapshot_root.join("outside-root.txt"), b"sentinel")?;
         xattr::set(
@@ -133,13 +143,61 @@ impl ReadOnlyFixture {
     pub fn snapshot(&self) -> io::Result<TreeSnapshot> {
         TreeSnapshot::capture(&self.snapshot_root)
     }
+
+    pub fn environment(&self) -> [(&'static str, PathBuf); 10] {
+        let temporary = self.snapshot_root.join("tmp");
+        [
+            ("HOME", self.home.clone()),
+            ("CFFIXED_USER_HOME", self.home.clone()),
+            ("TMPDIR", temporary.clone()),
+            ("TMP", temporary.clone()),
+            ("TEMP", temporary),
+            ("XDG_CACHE_HOME", self.snapshot_root.join("xdg/cache")),
+            ("XDG_CONFIG_HOME", self.snapshot_root.join("xdg/config")),
+            ("XDG_DATA_HOME", self.snapshot_root.join("xdg/data")),
+            ("XDG_STATE_HOME", self.snapshot_root.join("xdg/state")),
+            ("XDG_RUNTIME_DIR", self.snapshot_root.join("xdg/runtime")),
+        ]
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{ReadOnlyFixture, TreeSnapshot};
+    use std::collections::BTreeSet;
     use std::ffi::OsStr;
     use std::fs;
+
+    #[test]
+    fn environment_redirects_known_write_locations_under_the_snapshot_root() {
+        const EXPECTED: &[&str] = &[
+            "CFFIXED_USER_HOME",
+            "HOME",
+            "TEMP",
+            "TMP",
+            "TMPDIR",
+            "XDG_CACHE_HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_RUNTIME_DIR",
+            "XDG_STATE_HOME",
+        ];
+        let fixture = ReadOnlyFixture::create().expect("fixture must be created");
+        let environment = fixture.environment();
+
+        assert_eq!(
+            environment
+                .iter()
+                .map(|(name, _)| *name)
+                .collect::<BTreeSet<_>>(),
+            EXPECTED.iter().copied().collect()
+        );
+        assert!(
+            environment
+                .iter()
+                .all(|(_, path)| path.starts_with(&fixture.snapshot_root))
+        );
+    }
 
     #[test]
     fn snapshot_records_xattr_values() {
