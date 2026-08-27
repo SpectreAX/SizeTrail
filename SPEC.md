@@ -661,9 +661,9 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | 阶段 | 内容 | Definition of Done |
 |---|---|---|
 | **P0** ✅ | 需求固化 | `decisions.md` 已产出，Q0–Q26 全部消解，frontier 为空 |
-| **P1** | truth harness 与计量 schema | repo、CI 全绿、§10.3 五项自定义静态检查就位；§10.2 的 1、2 号测试通过；此时无任何 adapter |
+| **P1** | truth harness 与计量 schema | repo、CI 全绿、§10.3 五项自定义静态检查就位；空 side-effect registry、运行时计数器及 §10.2 的 1、2 号测试通过；此时无任何 adapter |
 | **P2** | read-only Root/fsx/capacity | §10.2 的 3、4、5 号测试通过（全部 APFS 反例）；plane 1 逐数字口径标注完成 |
-| **P3** | typed adapter contract | 契约 trait 冻结；`not_present` / 未知版本降级路径有测试；side-effect registry 就位 |
+| **P3** | typed adapter contract | 契约 trait 冻结；`not_present` / 未知版本降级路径有测试；adapter 的真实 probe 注册进 P1 已建立的 side-effect registry |
 | **P4** | 两个深 adapter + CLI/JSON | Xcode/CoreSimulator、Homebrew；§10.2 全部 13 项通过；§10.4 人工验证完成 → **发布 v0.1 技术预览（schema 明确不稳定）** |
 | **P5** | Docker adapter + 稳定化 | 第三个深 adapter；schema 冻结并文档化；完整口径文档；真机验收 → **发布 v1.0** |
 | **v1.x** | 第四个 adapter | Go（`GOCACHE`、`GOMODCACHE`）+ 版本门控 |
