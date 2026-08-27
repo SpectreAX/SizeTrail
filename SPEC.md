@@ -309,9 +309,10 @@ trait ToolchainAdapter {
 | 目标 | 状态 |
 |---|---|
 | deployment / API target | macOS 13 |
-| 当前 GA 验证 | macOS 15、26（Apple Silicon 与 Intel） |
+| P1–P3 runtime 验证 | macOS 15、26 标准 arm64 lane（Q30） |
+| Intel runtime | P4 加入；此前仅构建 x86_64 产物并检查 deployment target，不声称运行时已验证 |
 | macOS 14 arm64 | 仅在 `macos-14` runner 存续期间验证（2026-11-02 下线），之后自动移出矩阵。Intel 需 `macos-14-large` |
-| `xcode-27` lane | **只证明 macOS 26 上的工具链/SDK 兼容性。** 它是运行在 macOS 26 arm64 上的 SDK preview，不是 macOS 27 runtime；GitHub 当前无 `macos-27` runner |
+| `xcode-27` lane | P4 加入；**只证明 macOS 26 上的工具链/SDK 兼容性。** 它是运行在 macOS 26 arm64 上的 SDK preview，不是 macOS 27 runtime；GitHub 当前无 `macos-27` runner |
 | macOS 13 | best-effort，未经 hosted runtime CI 验证 |
 
 - CI 检查两种架构产物的 **Mach-O minimum OS version**。

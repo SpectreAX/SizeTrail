@@ -629,6 +629,18 @@ Q9 选择双 adapter 时，唯一的比较依据是人周估算。P1 连同 P1.1
 
 ---
 
+## Q30 — P1–P3 CI 运行时矩阵收窄
+
+**决策：P1–P3 的 hosted runtime CI 只运行 macOS 15 与 26 的标准 arm64 lane；Intel runtime 与 `xcode-27` lane 推迟到 P4。** 两种架构的 release 产物仍在每次 CI 中构建，并继续检查 Mach-O deployment target 为 macOS 13；这只证明 x86_64 可链接与 API baseline，不得写成 Intel runtime 已验证。
+
+理由：私有仓库 larger runner 按高倍率计费，而 P1–P3 尚无 adapter 版本兼容性需要 Intel 或 Xcode preview 真机证明。Q12 的「支持表由实际 CI matrix 生成」优先于静态愿望清单；未运行的 lane 不能进入已验证支持声明。
+
+被否：在 P1–P3 为 Intel larger runner 持续付费；把 x86_64 交叉构建误写为 runtime 验证；删除 x86_64 构建与 minimum-OS 检查。
+
+影响：Q12 中「当前 GA 验证 Apple Silicon 与 Intel」在 P4 前作废；`SPEC.md` §5.3 与 `.github/workflows/ci.yml`。
+
+---
+
 ## 附录 A — 实测环境基线
 
 采集于 2026-08-26，作为规则表量级参考与回归基线：
