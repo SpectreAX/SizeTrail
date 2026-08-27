@@ -215,7 +215,7 @@ SIP 默认启用。把它当免费安全网，但不得依赖它作为唯一防�
 | 关注点 | 选择 | 理由 |
 |---|---|---|
 | 语言 | Rust stable | 单二进制无运行时；类型系统可静态排除写路径 |
-| CLI | `clap` (derive) | 标准选择，自带 completion 生成 |
+| CLI | `clap` builder API | 标准选择，自带 completion 生成；不用 derive，因为 derive 宏会注入 lint `allow`，与 crate root 的 `forbid(clippy::disallowed_methods)` 冲突。不得仅为减少样板而重新启用 derive |
 | 并行遍历 | `jwalk` 或 `ignore::WalkBuilder` | 并行 walk，显著快于 `walkdir` |
 | 序列化 | `serde` + `serde_json` + `toml` | 规则表 TOML，输出 JSON |
 | 错误 | `anyhow`（应用层）+ `thiserror`（库层） | — |
@@ -664,6 +664,8 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 
 **每个阶段必须满足其 Definition of Done 才可进入下一阶段。不允许并行推进或跳阶。**
 
+**通道覆盖矩阵是 P2 起的常设交付物。** P2 与 P3 完成前都必须基于阶段后代码重新推导矩阵，并为本阶段新开的通道增加行，不能只沿用上一阶段结论。P2 至少逐项列出 `fsx/sys.rs` 内每个 `extern` 声明，以及读操作诱发的系统代写；P3 至少逐项列出每个外部命令、子进程与未沙箱化 daemon 的状态变化通道。
+
 | 阶段 | 内容 | Definition of Done |
 |---|---|---|
 | **P0** ✅ | 需求固化 | `decisions.md` 已产出，Q0–Q26 全部消解，frontier 为空 |
@@ -671,8 +673,8 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | **P1.1** | truth gate hardening | 五项自定义静态检查各有负向测试；零写与命令边界缺口关闭；side-effect registry 成为生产唯一来源；unsafe 唯一豁免边界与强化快照就位；此时仍无任何 adapter 或 FFI 实现 |
 | **P1.2** | control-integrity hardening | HOME/TMP/XDG 隔离与越界变异测试；Clippy 禁用集合精确锁定；locked metadata 与生成文档漂移负向测试；macOS 15/26 deny-write sandbox 证明 §8.1 强声明；此时仍不进入 P2 |
 | **P1.3** | zero-write channel hardening | lib/bin crate root 锁为 forbid；零写主 lint 纳入豁免边界；真实高价值路径新条目兜底；sandbox 能证明零写尝试为零或重新决策证据边界；`fsx/sys.rs` 返回值与未来 build script 契约写明；此时仍不进入 P2 |
-| **P2** | read-only Root/fsx/capacity | §10.2 的 3、4、5 号测试通过（全部 APFS 反例）；plane 1 逐数字口径标注完成 |
-| **P3** | typed adapter contract | 契约 trait 冻结；`not_present` / 未知版本降级路径有测试；adapter 的真实 probe 注册进 P1 已建立的 side-effect registry |
+| **P2** | read-only Root/fsx/capacity | §10.2 的 3、4、5 号测试通过（全部 APFS 反例）；plane 1 逐数字口径标注完成；重新推导通道覆盖矩阵并加入本阶段所有 FFI 与读诱发系统代写通道 |
+| **P3** | typed adapter contract | 契约 trait 冻结；`not_present` / 未知版本降级路径有测试；adapter 的真实 probe 注册进 P1 已建立的 side-effect registry；重新推导通道覆盖矩阵并加入本阶段所有命令、子进程与 daemon 通道 |
 | **P4** | 两个深 adapter + CLI/JSON | Xcode/CoreSimulator、Homebrew；§10.2 全部 13 项通过；§10.4 人工验证完成 → **发布 v0.1 技术预览（schema 明确不稳定）** |
 | **P5** | Docker adapter + 稳定化 | 第三个深 adapter；schema 冻结并文档化；完整口径文档；真机验收 → **发布 v1.0** |
 | **v1.x** | 第四个 adapter | Go（`GOCACHE`、`GOMODCACHE`）+ 版本门控 |
