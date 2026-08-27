@@ -11,7 +11,7 @@ fn physical_root(fixture: &tempfile::TempDir) -> std::path::PathBuf {
     fs::canonicalize(fixture.path()).expect("fixture root must have a physical path")
 }
 
-fn c_oracle(path: &Path) -> [Option<u64>; 5] {
+fn run_c_oracle(path: &Path, volume: bool) -> String {
     let build = tempfile::tempdir().expect("oracle build directory must be created");
     let executable = build.path().join("probe_attrs");
     let compiled = Command::new("xcrun")
@@ -22,12 +22,17 @@ fn c_oracle(path: &Path) -> [Option<u64>; 5] {
         .status()
         .expect("C oracle compiler must run");
     assert!(compiled.success(), "C oracle must compile");
-    let output = Command::new(executable)
-        .arg(path)
-        .output()
-        .expect("C oracle must run");
+    let mut command = Command::new(executable);
+    if volume {
+        command.arg("--volume");
+    }
+    let output = command.arg(path).output().expect("C oracle must run");
     assert!(output.status.success(), "C oracle must succeed");
-    let line = String::from_utf8(output.stdout).expect("C oracle output must be UTF-8");
+    String::from_utf8(output.stdout).expect("C oracle output must be UTF-8")
+}
+
+fn c_oracle(path: &Path) -> [Option<u64>; 5] {
+    let line = run_c_oracle(path, false);
 
     let field = |name: &str| {
         line.split_whitespace()
@@ -51,23 +56,7 @@ fn c_oracle(path: &Path) -> [Option<u64>; 5] {
 }
 
 fn c_volume_oracle(path: &Path) -> [u64; 4] {
-    let build = tempfile::tempdir().expect("oracle build directory must be created");
-    let executable = build.path().join("probe_attrs");
-    let compiled = Command::new("xcrun")
-        .args(["clang", "-Wall", "-Wextra", "-Werror"])
-        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("probe_attrs.c"))
-        .arg("-o")
-        .arg(&executable)
-        .status()
-        .expect("C oracle compiler must run");
-    assert!(compiled.success(), "C oracle must compile");
-    let output = Command::new(executable)
-        .arg("--volume")
-        .arg(path)
-        .output()
-        .expect("C volume oracle must run");
-    assert!(output.status.success(), "C volume oracle must succeed");
-    let line = String::from_utf8(output.stdout).expect("C oracle output must be UTF-8");
+    let line = run_c_oracle(path, true);
     let field = |name: &str| {
         line.split_whitespace()
             .find_map(|part| part.strip_prefix(name))

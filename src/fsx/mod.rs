@@ -298,32 +298,29 @@ fn enforce_mount_boundary(root: FileIdentity, object: FileIdentity) -> io::Resul
 }
 
 fn identity(raw: &sys::IdentityRaw) -> io::Result<FileIdentity> {
-    if raw.returned.common & (sys::bits::COMMON_FSID | sys::bits::COMMON_FILEID)
-        != sys::bits::COMMON_FSID | sys::bits::COMMON_FILEID
-        || raw.returned.fork & sys::bits::FORK_REAL_FSID == 0
-    {
-        return Err(io::Error::other(
-            "filesystem did not return physical fsid and fileid",
-        ));
-    }
-    Ok(FileIdentity {
-        fsid: raw.real_fsid,
-        fileid: raw.fileid,
-    })
+    checked_identity(raw.returned, raw.real_fsid, raw.fileid)
 }
 
 fn object_identity(raw: &sys::ObjectRaw) -> io::Result<FileIdentity> {
-    if raw.returned.common & (sys::bits::COMMON_FSID | sys::bits::COMMON_FILEID)
+    checked_identity(raw.returned, raw.real_fsid, raw.fileid)
+}
+
+fn checked_identity(
+    returned: sys::AttributeSet,
+    real_fsid: [i32; 2],
+    fileid: u64,
+) -> io::Result<FileIdentity> {
+    if returned.common & (sys::bits::COMMON_FSID | sys::bits::COMMON_FILEID)
         != sys::bits::COMMON_FSID | sys::bits::COMMON_FILEID
-        || raw.returned.fork & sys::bits::FORK_REAL_FSID == 0
+        || returned.fork & sys::bits::FORK_REAL_FSID == 0
     {
         return Err(io::Error::other(
             "filesystem did not return physical fsid and fileid",
         ));
     }
     Ok(FileIdentity {
-        fsid: raw.real_fsid,
-        fileid: raw.fileid,
+        fsid: real_fsid,
+        fileid,
     })
 }
 
