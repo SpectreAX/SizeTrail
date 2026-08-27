@@ -14,7 +14,8 @@
 | API 基线 | macOS 13（deployment target）；验证矩阵见 §5.3 |
 | 语言 | Rust stable（MSRV 锁定并写入 CI） |
 | 许可 | MIT OR Apache-2.0（**不得**复制 mole 代码，见 §14.2） |
-| v0.1 范围 | Xcode/CoreSimulator + Homebrew 两个 adapter，schema 明确不稳定 |
+| v0.1 范围 | Xcode/CoreSimulator 单 adapter，schema 明确不稳定（Q29） |
+| v0.2 范围 | 追加 Homebrew adapter |
 | v1.0 范围 | 追加 Docker Desktop adapter，schema 稳定 |
 
 ---
@@ -675,11 +676,12 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | **P1.3** | zero-write channel hardening | lib/bin crate root 锁为 forbid；零写主 lint 纳入豁免边界；真实高价值路径新条目兜底；sandbox 能证明零写尝试为零或重新决策证据边界；`fsx/sys.rs` 返回值与未来 build script 契约写明；此时仍不进入 P2 |
 | **P2** | read-only Root/fsx/capacity | §10.2 的 3、4、5 号测试通过（全部 APFS 反例）；plane 1 逐数字口径标注完成；重新推导通道覆盖矩阵并加入本阶段所有 FFI 与读诱发系统代写通道 |
 | **P3** | typed adapter contract | 契约 trait 冻结；`not_present` / 未知版本降级路径有测试；adapter 的真实 probe 注册进 P1 已建立的 side-effect registry；重新推导通道覆盖矩阵并加入本阶段所有命令、子进程与 daemon 通道 |
-| **P4** | 两个深 adapter + CLI/JSON | Xcode/CoreSimulator、Homebrew；§10.2 全部 13 项通过；§10.4 人工验证完成 → **发布 v0.1 技术预览（schema 明确不稳定）** |
+| **P4** | 首个深 adapter + CLI/JSON | Xcode/CoreSimulator（Q29 已将 Homebrew 移出本阶段）；§10.2 全部 13 项通过；§10.4 人工验证完成 → **发布 v0.1 技术预览（schema 明确不稳定）** |
+| **P4.1** | Homebrew adapter | 复用 P3 契约，无新增控制面 → **发布 v0.2** |
 | **P5** | Docker adapter + 稳定化 | 第三个深 adapter；schema 冻结并文档化；完整口径文档；真机验收 → **发布 v1.0** |
 | **v1.x** | 第四个 adapter | Go（`GOCACHE`、`GOMODCACHE`）+ 版本门控 |
 
-**工期估算**（30 小时/人周，从零实现）：P1–P4 约 10–15 人周；P5 使总量达 22–28 人周。
+**工期估算**（30 小时/人周，从零实现）：P1–P4 约 10–15 人周；P5 使总量达 22–28 人周。**该口径已被 P1–P1.3 的实际速度证明不适用于当前工作流（Q29），此处仅保留为范围相对大小的参考，不得作为发布承诺或范围裁剪依据。**
 
 **已永久移出范围：** TUI（约 3–6 人周）、写安全地基（20–27 人周）、adapter 写动作与撤销（6–9 人周）。全部塞入 v1 约 50–70 人周，对单人项目过大。
 
@@ -738,7 +740,7 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | macOS 大版本挪动路径 | 规则失效 | §6 规则数据化 + `os` 门控 + 每次大版本后回归 |
 | 区间过宽导致结论无用 | 用户看到「0 到 20GB」而无从判断 | §2.4 信号解释宽度；`filesystem_compressed` 明确展示为「private floor 不提供信息」 |
 | truth contract 腐烂 | 由弱承诺变为**虚假的强承诺** | §9 必须机械化为 CI，不得是人工清单 |
-| 单人项目永不发布 | 项目致命 | §12 先发 v0.1 双 adapter 预览；已永久移出 TUI 与写路径 |
+| 单人项目永不发布 | 项目致命 | §12 先发 v0.1 单 adapter 预览（Q29）；已永久移出 TUI 与写路径 |
 | 命名首次接触被误解 | 传播损失 | 已在 Q26 用「冷读可读性」这条筛选终局；`SizeTrail` 含 size 指向领域 |
 | 无护城河 | mole 若实现同一契约则差异消失 | 承认它（§1.2）。靠聚焦与执行质量存在，不宣称独占功能 |
 

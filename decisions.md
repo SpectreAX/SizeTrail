@@ -214,6 +214,8 @@ Docker.raw 同时封装镜像、容器、volume、BuildKit cache 等不同风险
 
 阶段重排：(1) truth harness 与计量 schema；(2) read-only Root/fsx/capacity；(3) typed adapter contract；(4) 三个深 adapter；(5) CLI/JSON、文档、真机验证与发布。
 
+**v0.1 的 adapter 数量已由 Q29 收窄为一个（Xcode/CoreSimulator）。** 本条的两步结构、v0.x 命名理由与工期口径继续有效；「双 adapter」这一具体切点作废。
+
 被否：C（完整原规格 v1，50–70 人周）。原 P4 TUI 与 P5–P7 mutation 整体移出（Q11 后永久删除）。
 
 ---
@@ -608,6 +610,22 @@ P1.2 的 deny-write profile 只阻止写成功。若产品吞掉 `EPERM`，scan 
 证据边界：Seatbelt 不追溯限制 sandbox 应用前已经打开的可写 fd；stdout/stderr 是产品明确允许的输出通道。`file-write*` 也不覆盖 IPC 请求未沙箱化 daemon 改状态。两者必须在通道覆盖矩阵中保持未覆盖，不得由本决策扩张声称。
 
 影响：`SPEC.md` §8.1、§10.2、§10.3 与 §12。
+
+---
+
+## Q29 — v0.1 收窄为单 adapter
+
+**决策：v0.1 技术预览只含 Xcode/CoreSimulator 一个深 adapter；Homebrew 移至 v0.2，Docker 仍在 v1.0。**
+
+Q9 选择双 adapter 时，唯一的比较依据是人周估算。P1 连同 P1.1–P1.3 三轮加固的实际落地速度证明该口径（30 小时/人周、从零实现）无法描述当前工作流，因此「两个 adapter 才够一次发布」这个前提不再成立 —— 决定发布时机的是 P2 的 FFI 正确性与 P4 的第三方 CLI 版本门控，不是 adapter 计数。
+
+选 Xcode/CoreSimulator 而非 Homebrew 作为唯一 adapter：它是目标受众最大的存储去处（DerivedData、iOS DeviceSupport、模拟器 runtime 与 device data），且同时覆盖 Q7 的 observe-only 边界（device data 是 user_adjacent）与 Q8 的 typed adapter 必要性（CoreSimulator 需要动态枚举）。Homebrew 主要是路径型缓存，对计量契约的压力测试价值低于前者。
+
+单 adapter 不放松任何既有契约：§10.2 的 13 项测试、三平面计量、coverage_gaps 与 truth CI 全部照旧。未实现的 Homebrew/Docker 归属继续落在「未归属到任何工具链」桶与 `coverage_gaps`，**不得**因 adapter 变少而弱化覆盖率表述或暗示扫描已完整。
+
+被否：维持双 adapter（把已知失准的工期估算当作范围依据）、P2 后仅发 plane 1 容量事实（`df` 与 `diskutil` 已覆盖，单独发布无用户价值）。
+
+影响：`SPEC.md` §0 摘要表、§12 阶段表与工期段。Q9 的两步结构与 v0.x 命名理由不变。
 
 ---
 
