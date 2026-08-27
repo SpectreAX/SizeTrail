@@ -6,7 +6,7 @@
 )]
 #![deny(clippy::disallowed_types)]
 
-pub(crate) mod fsx;
+pub mod fsx;
 pub mod model;
 pub mod policy;
 pub mod scan;

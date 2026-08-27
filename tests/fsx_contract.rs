@@ -1,4 +1,4 @@
-#![allow(clippy::disallowed_methods)]
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
 use std::fs;
 use std::os::unix::fs::MetadataExt;
@@ -57,7 +57,9 @@ fn read_only_wrappers_measure_a_fixture_without_changing_it() {
     let measured = root
         .measure_object(&path)
         .expect("fixture object must be measurable");
-    let capacity = root.capacity().expect("fixture capacity must be measurable");
+    let capacity = root
+        .capacity()
+        .expect("fixture capacity must be measurable");
 
     assert_eq!(measured.logical_bytes, 4096);
     assert_eq!(measured.identity.fsid, root.identity().fsid);

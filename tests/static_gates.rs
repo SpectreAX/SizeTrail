@@ -135,17 +135,22 @@ fn clippy_disallowed_policy_is_an_exact_reviewed_set() {
 fn fsx_extern_symbols_are_an_exact_reviewed_set() {
     let source = fs::read_to_string(repository_root().join("src/fsx/sys.rs"))
         .expect("fsx syscall boundary must be readable");
-    let declared: BTreeSet<&str> = source
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("fn "))
-        .filter_map(|declaration| declaration.split_once('(').map(|(name, _)| name))
-        .collect();
-    let expected = BTreeSet::from([
-        "getattrlist",
-        "getiopolicy_np",
-        "setiopolicy_np",
-        "statfs",
-    ]);
+    let mut inside_extern = false;
+    let mut declared = BTreeSet::new();
+    for line in source.lines() {
+        let line = line.trim();
+        if line == "unsafe extern \"C\" {" {
+            inside_extern = true;
+        } else if inside_extern && line == "}" {
+            inside_extern = false;
+        } else if inside_extern
+            && let Some(declaration) = line.strip_prefix("fn ")
+            && let Some((name, _)) = declaration.split_once('(')
+        {
+            declared.insert(name);
+        }
+    }
+    let expected = BTreeSet::from(["getattrlist", "getiopolicy_np", "setiopolicy_np", "statfs"]);
 
     assert_eq!(declared, expected);
 }
