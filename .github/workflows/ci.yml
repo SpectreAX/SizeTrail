@@ -43,6 +43,7 @@ jobs:
 
       - name: Lint suppression boundaries
         run: |
+          bash scripts/check-policy-boundary.sh clippy::disallowed_methods - src
           bash scripts/check-policy-boundary.sh clippy::disallowed_types src/policy.rs src clippy::style clippy::all clippy::disallowed_type warnings
           bash scripts/check-policy-boundary.sh unsafe_code src/fsx/sys.rs src warnings
 

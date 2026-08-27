@@ -1,32 +1,31 @@
-#![deny(
-    clippy::disallowed_methods,
-    clippy::disallowed_types,
+#![forbid(clippy::disallowed_methods)]
+#![forbid(
+    clippy::let_underscore_must_use,
+    clippy::let_underscore_untyped,
     clippy::unwrap_used
 )]
+#![deny(clippy::disallowed_types)]
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{Arg, ArgAction, Command, value_parser};
 use sizetrail::model::EnvironmentEnvelope;
 use sizetrail::scan::scan;
 
-#[derive(Parser)]
-#[command(name = "sizetrail", disable_version_flag = true)]
-struct Cli {
-    #[arg(long, global = true, hide = true)]
-    root: Option<PathBuf>,
-
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    Scan {
-        #[arg(long)]
-        json: bool,
-    },
+fn command() -> Command {
+    Command::new("sizetrail")
+        .disable_version_flag(true)
+        .arg(
+            Arg::new("root")
+                .long("root")
+                .global(true)
+                .hide(true)
+                .value_parser(value_parser!(PathBuf)),
+        )
+        .subcommand(
+            Command::new("scan").arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
+        )
 }
 
 fn main() -> ExitCode {
@@ -40,19 +39,21 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<u8, String> {
-    let cli = Cli::parse();
-    let Some(command) = cli.command else {
-        println!("{}", Cli::command().render_long_help());
+    let matches = command().get_matches();
+    let Some((subcommand, arguments)) = matches.subcommand() else {
+        println!("{}", command().render_long_help());
         return Ok(0);
     };
 
-    match command {
-        Commands::Scan { json } => {
-            let environment = EnvironmentEnvelope::capture(cli.root.as_deref())
-                .map_err(|error| error.to_string())?;
+    match subcommand {
+        "scan" => {
+            let environment = EnvironmentEnvelope::capture(
+                matches.get_one::<PathBuf>("root").map(PathBuf::as_path),
+            )
+            .map_err(|error| error.to_string())?;
             let document = scan(environment);
 
-            if json {
+            if arguments.get_flag("json") {
                 let rendered =
                     serde_json::to_string(&document).map_err(|error| error.to_string())?;
                 println!("{rendered}");
@@ -62,5 +63,6 @@ fn run() -> Result<u8, String> {
 
             Ok(0)
         }
+        _ => unreachable!("clap only returns declared subcommands"),
     }
 }
