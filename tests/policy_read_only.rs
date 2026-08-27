@@ -26,7 +26,9 @@ fn scan_does_not_change_the_fixture_inside_or_outside_root() {
         .expect("high-value final snapshot must succeed");
     assert_eq!(before, after);
     assert!(
-        high_value_after.new_entries_since(&high_value_before).is_empty(),
+        high_value_after
+            .new_entries_since(&high_value_before)
+            .is_empty(),
         "scan created an entry in a high-value real path"
     );
 }
@@ -56,7 +58,8 @@ fn high_value_fallback_detects_a_hard_coded_tmp_write() {
     ));
     std::fs::write(&probe, b"mutation").expect("hard-coded mutation must be written");
 
-    let after = HighValueEntrySnapshot::capture(None).expect("fallback final snapshot must succeed");
+    let after =
+        HighValueEntrySnapshot::capture(None).expect("fallback final snapshot must succeed");
     let new_entries = after.new_entries_since(&before);
     std::fs::remove_file(&probe).expect("hard-coded mutation must be removed");
 

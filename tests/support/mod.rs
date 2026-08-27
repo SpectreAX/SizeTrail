@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io;
@@ -38,6 +38,65 @@ impl TreeSnapshot {
         let mut entries = BTreeMap::new();
         capture_entry(root, root, &mut entries)?;
         Ok(Self { entries })
+    }
+}
+
+#[derive(Debug)]
+pub struct HighValueEntrySnapshot {
+    roots: BTreeMap<PathBuf, Option<BTreeSet<OsString>>>,
+}
+
+impl HighValueEntrySnapshot {
+    pub fn capture(real_home: Option<&Path>) -> io::Result<Self> {
+        // Deliberately shallow: this catches high-value new entries, not arbitrary writes.
+        let mut paths = vec![PathBuf::from("/tmp"), PathBuf::from("/var/tmp")];
+        if let Some(home) = real_home {
+            paths.extend([
+                home.join("Library/Logs"),
+                home.join("Library/Caches"),
+                home.join("Library/Preferences"),
+                home.join("Library/Application Support"),
+            ]);
+        }
+
+        let mut roots = BTreeMap::new();
+        for path in paths {
+            let entries = match fs::read_dir(&path) {
+                Ok(entries) => Some(
+                    entries
+                        .map(|entry| entry.map(|entry| entry.file_name()))
+                        .collect::<io::Result<_>>()?,
+                ),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error),
+            };
+            roots.insert(path, entries);
+        }
+        Ok(Self { roots })
+    }
+
+    pub fn new_entries_since(&self, before: &Self) -> BTreeSet<PathBuf> {
+        let mut added = BTreeSet::new();
+        for (root, after_entries) in &self.roots {
+            match (
+                before.roots.get(root).and_then(Option::as_ref),
+                after_entries,
+            ) {
+                (Some(before_entries), Some(after_entries)) => {
+                    added.extend(
+                        after_entries
+                            .difference(before_entries)
+                            .map(|entry| root.join(entry)),
+                    );
+                }
+                (None, Some(after_entries)) => {
+                    added.insert(root.clone());
+                    added.extend(after_entries.iter().map(|entry| root.join(entry)));
+                }
+                _ => {}
+            }
+        }
+        added
     }
 }
 
