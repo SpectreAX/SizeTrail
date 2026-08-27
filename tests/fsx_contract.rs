@@ -55,7 +55,7 @@ fn c_oracle(path: &Path) -> [Option<u64>; 5] {
     ]
 }
 
-fn c_volume_oracle(path: &Path) -> [u64; 4] {
+fn c_volume_oracle(path: &Path) -> [u64; 8] {
     let line = run_c_oracle(path, true);
     let field = |name: &str| {
         line.split_whitespace()
@@ -69,6 +69,10 @@ fn c_volume_oracle(path: &Path) -> [u64; 4] {
         field("free="),
         field("available="),
         field("used="),
+        field("block_size="),
+        field("blocks="),
+        field("blocks_free="),
+        field("blocks_available="),
     ]
 }
 
@@ -204,4 +208,14 @@ fn rust_volume_layout_matches_the_c_oracle() {
             "volatile volume value differs from the C oracle by at least 1 GiB"
         );
     }
+    let container = c[5]
+        .checked_sub(c[6])
+        .and_then(|blocks| blocks.checked_mul(c[4]))
+        .expect("C statfs container arithmetic must fit");
+    let rust_container = measured(sizetrail::fsx::CapacityKind::ContainerAllocated)
+        .expect("APFS shared container must be measured");
+    assert!(
+        rust_container.abs_diff(container) < 1024 * 1024 * 1024,
+        "Rust statfs layout differs from the C oracle by at least 1 GiB"
+    );
 }

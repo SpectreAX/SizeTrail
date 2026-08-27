@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/attr.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -32,8 +33,10 @@ struct volume_buf {
 static int print_volume(const char *path) {
     struct attrlist al;
     struct volume_buf b;
+    struct statfs s;
     memset(&al, 0, sizeof(al));
     memset(&b, 0, sizeof(b));
+    memset(&s, 0, sizeof(s));
     al.bitmapcount = ATTR_BIT_MAP_COUNT;
     al.commonattr = ATTR_CMN_RETURNED_ATTRS;
     al.volattr = ATTR_VOL_SIZE | ATTR_VOL_SPACEFREE | ATTR_VOL_SPACEAVAIL |
@@ -45,10 +48,17 @@ static int print_volume(const char *path) {
         fprintf(stderr, "volume getattrlist: %s\n", strerror(errno));
         return 1;
     }
-    printf("size=%lld free=%lld available=%lld used=%lld returned=0x%x valid=0x%x\n",
+    if (statfs(path, &s) != 0) {
+        fprintf(stderr, "statfs: %s\n", strerror(errno));
+        return 1;
+    }
+    printf("size=%lld free=%lld available=%lld used=%lld returned=0x%x valid=0x%x "
+           "block_size=%u blocks=%llu blocks_free=%llu blocks_available=%llu\n",
            (long long)b.size, (long long)b.free, (long long)b.available,
            (long long)b.used, b.returned.volattr,
-           b.attributes.validattr.volattr);
+           b.attributes.validattr.volattr, s.f_bsize,
+           (unsigned long long)s.f_blocks, (unsigned long long)s.f_bfree,
+           (unsigned long long)s.f_bavail);
     return 0;
 }
 
