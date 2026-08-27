@@ -4,6 +4,7 @@
     clippy::unwrap_used
 )]
 
+pub(crate) mod fsx;
 pub mod model;
 pub mod policy;
 pub mod scan;
