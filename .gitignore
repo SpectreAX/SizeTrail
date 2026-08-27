@@ -1,0 +1,13 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Cargo.lock 不忽略：本仓库产出二进制，锁文件须随仓库以保证可复现构建。
+
+# 一次性 APFS 探针的编译产物（probe_attrs.c 本身要提交，二进制不提交）
+/probe_attrs
+*.o
+*.dSYM/
+
+# macOS
+.DS_Store
