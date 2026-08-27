@@ -8,7 +8,7 @@ pub const SELECT_DEVELOPER_DIR: ProbeId = XCODE_SELECT_DEVELOPER_DIR;
 pub const XCODEBUILD_VERSION: ProbeId = XCODE_XCODEBUILD_VERSION;
 pub const FIRST_LAUNCH_STATUS: ProbeId = XCODE_FIRST_LAUNCH_STATUS;
 
-const VERIFIED_VERSIONS: &[(&str, &str)] = &[("16.4", "16F6"), ("26.5", "17F42")];
+const VERIFIED_VERSIONS: &[(&str, &str)] = &[("16.4", "16F6"), ("26.6", "17F113")];
 
 pub fn probe(ctx: &mut PolicyCtx<'_>) -> AdapterState {
     let selected = match ctx.run(SELECT_DEVELOPER_DIR) {
@@ -43,19 +43,25 @@ pub fn probe(ctx: &mut PolicyCtx<'_>) -> AdapterState {
     };
     let text = String::from_utf8_lossy(&version.stdout);
     let mut lines = text.lines();
-    let observed = lines
+    let version_number = lines
         .next()
         .and_then(|line| line.strip_prefix("Xcode "))
         .map(str::to_owned);
     let build = lines
         .next()
-        .and_then(|line| line.strip_prefix("Build version "));
-    let verified = observed
+        .and_then(|line| line.strip_prefix("Build version "))
+        .map(str::to_owned);
+    let verified = version_number
         .as_deref()
-        .zip(build)
+        .zip(build.as_deref())
         .is_some_and(|pair| VERIFIED_VERSIONS.contains(&pair));
+    let observed_version = version_number
+        .as_deref()
+        .zip(build.as_deref())
+        .map(|(version, build)| format!("{version} ({build})"))
+        .or(version_number);
 
-    match (verified, observed) {
+    match (verified, observed_version) {
         (true, Some(version)) => match ctx.run(FIRST_LAUNCH_STATUS) {
             Ok(output) if output.success => AdapterState::Ready { version },
             Ok(_) => AdapterState::Degraded {

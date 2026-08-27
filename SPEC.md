@@ -320,7 +320,7 @@ trait ToolchainAdapter {
 - 每个 adapter **必须钉住已验证的第三方 CLI 版本范围**，未知版本显式降级。这是最大的长期维护风险：adapter 包装的是第三方 CLI，输出格式会变。
 - 规则**只能引用已编译的 adapter id**，不能提供任意命令。**这是安全属性，不是架构品味** —— 允许 TOML 携带任意命令等于开命令注入面。
 
-**P3 Xcode probe（Q35）：** registry 仅含 `xcode-select -p`、`xcodebuild -version`、`xcodebuild -checkFirstLaunchStatus` 三条绝对只读命令，各最多一次，共用 `SIZETRAIL_NO_XCODE_PROBE`。固定 C locale 并移除 `DEVELOPER_DIR` / `SDKROOT` / `TOOLCHAINS` 与已知 `xcrun_*` 重定向变量。标准 CLT selection 是 `not_present`；未知版本与未完成 first-launch/license 是不同 degraded reason。P3 不运行 `xcrun` 或 `simctl`。
+**P3 Xcode probe（Q35）：** registry 仅含 `xcode-select -p`、`xcodebuild -version`、`xcodebuild -checkFirstLaunchStatus` 三条绝对只读命令，各最多一次，共用 `SIZETRAIL_NO_XCODE_PROBE`。固定 C locale 并移除 `DEVELOPER_DIR` / `SDKROOT` / `TOOLCHAINS` 与已知 `xcrun_*` 重定向变量。标准 CLT selection 是 `not_present`；未知版本（诊断同时保留 version + build id）与未完成 first-launch/license 是不同 degraded reason。P3 不运行 `xcrun` 或 `simctl`。当前 hosted 精确验证对为 `16.4 (16F6)` 与 `26.6 (17F113)`；矩阵漂移必须令测试失败并显式更新。
 
 ### 5.3 验证矩阵（Q12）
 

@@ -144,7 +144,7 @@ mod tests {
         assert_eq!(
             xcode::probe(&mut ctx),
             AdapterState::Degraded {
-                observed_version: Some("999.0".to_owned()),
+                observed_version: Some("999.0 (Fixture)".to_owned()),
                 reason: AdapterDegradedReason::UnknownVersion,
             }
         );

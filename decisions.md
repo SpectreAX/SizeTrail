@@ -726,7 +726,7 @@ Q28 的哨兵同时收紧：START/END 不得只匹配 message token，必须在�
 
 状态映射：无 selection 或标准 CLT selection → `not_present`；非 Xcode selection、版本输出不可解析、命令失败 → typed degraded；版本不在 hosted 验证集合 → `unknown_version`；first-launch/license 检查非零 → `not_ready`。P3 不调用 `xcrun` / `simctl`；任何 `simctl` 命令留到 P4，并按可能启动 CoreSimulatorService 的 daemon-capable probe 处理。
 
-当前验证集合绑定 hosted image：macOS 15 默认 Xcode `16.4 (16F6)`，macOS 26 默认 Xcode `26.5 (17F42)`。runner 轮换必须显式更新 registry 测试与支持证据；不得把范围外版本当 ready。
+当前验证集合绑定 hosted image：macOS 15 默认 Xcode `16.4 (16F6)`，macOS 26 默认 Xcode `26.6 (17F113)`。后者由 P3 首次 hosted run 的 unknown-version 门禁实际发现，并与 runner-images 当前 manifest 互证；这也证明门禁会在能力漂移时失败。runner 轮换必须显式更新 registry 测试与支持证据；不得把范围外版本当 ready。
 
 被否：每条固定绝对命令前再调用 `which`（增加 PATH 敏感的子进程却不增加证据）；以 `xcrun --version` 代替 Xcode 版本（它报告 CLT/xcrun 版本）；P3 提前调用 `simctl list`（启动/连接 daemon，属于 P4 inventory）。
 
