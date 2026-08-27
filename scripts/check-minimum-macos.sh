@@ -28,4 +28,3 @@ while IFS= read -r version; do
     exit 1
   fi
 done <<< "$minimum_versions"
-

@@ -24,4 +24,3 @@ disallowed-methods = [
 disallowed-types = [
   { path = "std::process::Command", reason = "external commands are confined to src/policy.rs" },
 ]
-
