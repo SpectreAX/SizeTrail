@@ -2,7 +2,7 @@
 set -euo pipefail
 
 roots=()
-for candidate in README.md docs site; do
+for candidate in src README.md docs site; do
   if [[ -e "$candidate" ]]; then
     roots+=("$candidate")
   fi

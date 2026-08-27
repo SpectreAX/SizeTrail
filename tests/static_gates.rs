@@ -75,6 +75,9 @@ fn lint_boundary_gate_rejects_all_suppression_forms_outside_policy() {
         "#![expect(clippy::disallowed_types)]\n",
         "#![cfg_attr(test, allow(clippy::disallowed_types))]\n",
         "#![allow(clippy::disallowed_types)]\n",
+        "#![allow(clippy::style)]\n",
+        "#![expect(clippy::all)]\n",
+        "#![allow(clippy::disallowed_type)]\n",
     ];
 
     for form in forms {
@@ -95,10 +98,34 @@ fn lint_boundary_gate_rejects_all_suppression_forms_outside_policy() {
                 "clippy::disallowed_types",
                 "src/policy.rs",
                 "src",
+                "clippy::style",
+                "clippy::all",
+                "clippy::disallowed_type",
+                "warnings",
             ],
         );
         assert_rejected(output, "lint suppression boundary gate");
     }
+
+    let fixture = TempDir::new().expect("unsafe boundary fixture must be created");
+    fs::create_dir_all(fixture.path().join("src/fsx")).expect("fsx directory must be created");
+    fs::write(
+        fixture.path().join("src/fsx/sys.rs"),
+        "#![allow(unsafe_code)]\n",
+    )
+    .expect("allowed unsafe suppression must be written");
+    fs::write(
+        fixture.path().join("src/scan.rs"),
+        "#![cfg_attr(test, expect(unsafe_code))]\n",
+    )
+    .expect("forbidden unsafe suppression must be written");
+
+    let output = run_script(
+        "check-policy-boundary.sh",
+        fixture.path(),
+        ["unsafe_code", "src/fsx/sys.rs", "src", "warnings"],
+    );
+    assert_rejected(output, "unsafe suppression boundary gate");
 }
 
 #[test]
@@ -121,11 +148,8 @@ fn claim_pattern_gate_rejects_forbidden_program_output() {
 fn quantitative_document_gate_rejects_handwritten_number() {
     let fixture = TempDir::new().expect("documentation fixture must be created");
     fs::create_dir(fixture.path().join("docs")).expect("docs directory must be created");
-    fs::write(
-        fixture.path().join("docs/guide.md"),
-        "Requires macOS 13.\n",
-    )
-    .expect("handwritten number must be written");
+    fs::write(fixture.path().join("docs/guide.md"), "Requires macOS 13.\n")
+        .expect("handwritten number must be written");
 
     assert_rejected(
         run_script(
