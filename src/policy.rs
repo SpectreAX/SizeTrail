@@ -51,8 +51,18 @@ pub struct InvocationTracker<'a> {
     counts: BTreeMap<ProbeId, usize>,
 }
 
+impl InvocationTracker<'static> {
+    pub fn for_scan() -> Self {
+        Self {
+            policies: SIDE_EFFECT_REGISTRY,
+            counts: BTreeMap::new(),
+        }
+    }
+}
+
 impl<'a> InvocationTracker<'a> {
-    pub fn new(policies: &'a [ProbePolicy]) -> Self {
+    #[cfg(test)]
+    fn for_test(policies: &'a [ProbePolicy]) -> Self {
         Self {
             policies,
             counts: BTreeMap::new(),
@@ -85,5 +95,45 @@ impl<'a> InvocationTracker<'a> {
 
     pub fn count(&self, id: ProbeId) -> usize {
         self.counts.get(&id).copied().unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{InvocationTracker, PolicyError, ProbeId, ProbePolicy};
+
+    #[test]
+    fn production_tracker_uses_the_compiled_registry() {
+        const UNKNOWN_ID: ProbeId = ProbeId::new("fixture.unknown");
+        let mut tracker = InvocationTracker::for_scan();
+
+        assert_eq!(
+            tracker.invoke(UNKNOWN_ID, || ()),
+            Err(PolicyError::UndeclaredProbe(UNKNOWN_ID))
+        );
+    }
+
+    #[test]
+    fn registry_caps_declared_probes_and_rejects_undeclared_probes_before_invocation() {
+        const DECLARED_ID: ProbeId = ProbeId::new("fixture.read_only");
+        const UNDECLARED_ID: ProbeId = ProbeId::new("fixture.undeclared");
+        const POLICIES: &[ProbePolicy] = &[ProbePolicy {
+            id: DECLARED_ID,
+            max_calls_per_scan: 1,
+            disable_env: "SIZETRAIL_NO_FIXTURE_PROBE",
+        }];
+
+        let mut tracker = InvocationTracker::for_test(POLICIES);
+        let mut actual_calls = 0;
+
+        tracker
+            .invoke(DECLARED_ID, || actual_calls += 1)
+            .expect("the declared call is within its limit");
+        assert!(tracker.invoke(DECLARED_ID, || actual_calls += 1).is_err());
+        assert!(tracker.invoke(UNDECLARED_ID, || actual_calls += 1).is_err());
+
+        assert_eq!(actual_calls, 1);
+        assert_eq!(tracker.count(DECLARED_ID), 1);
+        assert_eq!(tracker.count(UNDECLARED_ID), 0);
     }
 }
