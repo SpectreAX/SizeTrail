@@ -56,7 +56,7 @@ jobs:
         run: |
           cargo test --locked --test generate_docs -- --ignored
           bash scripts/check-quantitative-docs.sh
-          git diff --exit-code -- docs/generated
+          bash scripts/check-generated-docs.sh
 
       - name: Build both supported architectures
         run: |
@@ -67,6 +67,9 @@ jobs:
         run: |
           bash scripts/check-minimum-macos.sh target/aarch64-apple-darwin/release/sizetrail arm64
           bash scripts/check-minimum-macos.sh target/x86_64-apple-darwin/release/sizetrail x86_64
+
+      - name: System-call zero-write sandbox
+        run: bash scripts/check-zero-write-sandbox.sh target/aarch64-apple-darwin/release/sizetrail
 
       - name: Install dependency policy tools
         if: matrix.macos == 15
