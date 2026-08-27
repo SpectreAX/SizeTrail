@@ -74,6 +74,35 @@ pub struct Finding {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Advice {
+    Command(CommandAdvice),
+    Reveal(RevealAdvice),
+}
+
+#[derive(Debug, Serialize)]
+pub struct CommandAdvice {
+    pub display_command: String,
+    pub impact: AdviceImpact,
+    pub explanation: String,
+    pub reliable_preview_available: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RevealAdvice {
+    pub normalized_path: String,
+    pub recovery_semantics: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdviceImpact {
+    Inspect,
+    Reversible,
+    Destructive,
+}
+
+#[derive(Debug, Serialize)]
 pub struct Measurement {
     pub plane: MeasurementPlane,
     pub basis: MeasurementBasis,

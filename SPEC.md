@@ -234,7 +234,7 @@ SIP 默认启用。把它当免费安全网，但不得依赖它作为唯一防�
 
 已确认可用：`tmutil`、`brctl`、`mdutil`、`diskutil`、`xcrun`。`fd` 不存在 → 不得依赖，自行实现并行遍历。
 
-**所有外部命令必须：** 调用前 `which` 探测 → 缺失时记 `not_present`（退出码 0，非失败）→ 版本落在已验证范围外时显式降级 → 绝不 panic。
+**所有外部命令必须：** 由 policy registry 固定绝对 executable、参数、环境与调用上限 → 缺失时记 `not_present`（退出码 0，非失败）→ 版本落在已验证范围外时显式降级 → 绝不 panic。不得额外依赖 PATH-sensitive `which`；developer-tool shim 的文件存在也不构成工具链可用证据（Q35）。
 
 只允许**闭集**的只读命令。见 §8.2。
 
@@ -296,10 +296,10 @@ trait ToolchainAdapter {
 
     /// 探测工具链是否存在、版本是否在已验证范围内。
     /// 不存在 → NotPresent（非失败）；未知版本 → Degraded。
-    fn probe(&self, ctx: &PolicyCtx) -> AdapterState;
+    fn probe(&self, ctx: &mut PolicyCtx) -> AdapterState;
 
     /// 枚举 store 对象。只读。
-    fn inventory(&self, ctx: &PolicyCtx) -> Inventory;
+    fn inventory(&self, ctx: &mut PolicyCtx) -> Inventory;
 
     /// 归类：action/mechanism、recoverability、sensitivity（Q4）。
     fn classify(&self, inv: &Inventory) -> Vec<Finding>;
@@ -309,6 +309,9 @@ trait ToolchainAdapter {
 }
 ```
 
+`PolicyCtx` 显式使用可变借用，因为每次外部 probe 都必须更新 P1 的运行时调用计数器。
+不得用内部可变性隐藏这一副作用状态，也不得让 adapter 绕过 context 自行起进程。
+
 **没有 `execute`。** 契约就是 `probe → inventory → classify → advise`（Q7 + Q11）。
 
 **adapter 纪律（Q8）：**
@@ -316,6 +319,8 @@ trait ToolchainAdapter {
 - v1 只上 **3 个全深度** adapter：Xcode/CoreSimulator、Homebrew、Docker Desktop。**浅 adapter 比没有更差** —— 它把 mole 的 feature-local 问题搬进我们自己的架构。
 - 每个 adapter **必须钉住已验证的第三方 CLI 版本范围**，未知版本显式降级。这是最大的长期维护风险：adapter 包装的是第三方 CLI，输出格式会变。
 - 规则**只能引用已编译的 adapter id**，不能提供任意命令。**这是安全属性，不是架构品味** —— 允许 TOML 携带任意命令等于开命令注入面。
+
+**P3 Xcode probe（Q35）：** registry 仅含 `xcode-select -p`、`xcodebuild -version`、`xcodebuild -checkFirstLaunchStatus` 三条绝对只读命令，各最多一次，共用 `SIZETRAIL_NO_XCODE_PROBE`。固定 C locale 并移除 `DEVELOPER_DIR` / `SDKROOT` / `TOOLCHAINS` 与已知 `xcrun_*` 重定向变量。标准 CLT selection 是 `not_present`；未知版本与未完成 first-launch/license 是不同 degraded reason。P3 不运行 `xcrun` 或 `simctl`。
 
 ### 5.3 验证矩阵（Q12）
 
@@ -475,7 +480,7 @@ enum Advice {
 
 1. 整个 crate 不存在 `fs::write`、`fs::remove_*`、`fs::rename`、`File::create`、`OpenOptions::write/append/create`。唯一输出是 stdout / stderr。`src/lib.rs` 与 `src/main.rs` 两个独立 crate root 必须以 `forbid(clippy::disallowed_methods)` 锁死该约束；`disallowed_types` 与 `unsafe_code` 因各有唯一合法豁免点，保持 `deny` 并由边界脚本限制豁免位置。非测试代码没有合法 `unwrap()` 豁免，故两根同时 `forbid(clippy::unwrap_used)`。
 2. 无操作日志文件、无缓存文件、无配置文件、无 `completion` 写盘（Q17 / Q20 / Q22）。
-3. **可机械验证的安全属性：正常运行不产生任何文件系统或外部工具写操作。** CI 静态 API 门禁 + 重定向写入位置环境变量的运行时快照 + macOS 15/26 上 `sandbox-exec` 的 `(deny file-write*)` 系统调用级强制，共同验证 §10.2 第 1、2 条。deny 规则必须携带每次运行唯一的 message token，并由 unified log 实时观察器断言 scan token 的违规记录为零；仅断言 scan 成功或文件未出现不够，因为产品可能吞掉 `EPERM`。START/END 必拒哨兵分别证明观察器已接通、事件已排空。sandbox 门禁必须 fail closed；若目标 runner 不再支持该 deprecated 机制，必须先通过 decision record 重定证据或收窄声明，不得静默删除门禁。该证据不覆盖 sandbox 前已打开的额外 fd，也不覆盖 IPC 请求未沙箱化 daemon 改状态。
+3. **可机械验证的安全属性：正常运行不向用户或系统数据路径发起任何写操作。** CI 静态 API 门禁 + 重定向写入位置环境变量的运行时快照 + macOS 15/26 上 `sandbox-exec` 的 `(deny file-write*)` 系统调用级强制，共同验证 §10.2 第 1、2 条。唯一例外是 dyld 注册 DOF 时对字符设备 `/dev/dtracehelper` 的 `file-write-data`（Q34）；profile 以 literal path + exact operation 窄允许，其他写继续全部拒绝。deny 规则必须携带每次运行唯一的 message token，并由 unified log 实时观察器断言 scan token 的其他违规记录为零；仅断言 scan 成功或文件未出现不够，因为产品可能吞掉 `EPERM`。START/END 必拒哨兵分别证明观察器已接通、事件已排空，并必须在同一事件中同时匹配 token、`file-write-create` 与精确目标路径。sandbox 门禁必须 fail closed；若目标 runner 不再支持该 deprecated 机制，必须先通过 decision record 重定证据或收窄声明，不得静默删除门禁。该证据不覆盖 sandbox 前已打开的额外 fd，也不覆盖 IPC 请求未沙箱化 daemon 改状态。
 4. **`src/fsx/sys.rs` 是唯一 unsafe 豁免点。** 该模块只导出只读系统调用包装，公开签名不得暴露可写句柄、可变缓冲区、写入 flag 或执行任意系统调用的能力；其他文件不得抑制 `unsafe_code` lint。所有系统调用返回值与 `errno` 必须检查并向上返回，禁止用 `let _ =` 或等价形式丢弃可能表示写尝试或调用失败的结果。两个 crate root 以 `forbid(clippy::let_underscore_must_use, clippy::let_underscore_untyped)` 机械拦截 `let _ = Result` 与未标类型的 raw status；这些 lint **不能**识别写语义，也拦不住显式类型的 raw integer 或裸调用，故只作为契约的局部机械化，不能替代代码审查与运行时证据。模块内部无法由 Clippy 的 Rust API 禁用表证明零写，**其零写保证明确且仅由 §10.2 第 1 条运行时 harness 覆盖**。P1.1 只建立此边界，不实现 `getattrlist`。
 5. 当前 crate **没有 `build.rs`**。build script 是独立 crate；未来若引入，必须同样设置 `forbid(clippy::disallowed_methods)`，纳入 lint suppression 边界与系统调用级零写测试。未同时补齐这些控制前，禁止新增 `build.rs`。
 
@@ -576,7 +581,7 @@ GA runner 记录 fixture benchmark，但**只发布「该 runner image + fixture
 
 **这些是「防止说谎」与「防止副作用」测试，缺一不可。**
 
-1. **零写测试** ★ — HOME、TMPDIR/TMP/TEMP 与 XDG 写入位置全部重定向到 fixture 快照根内；全量 scan 后断言 `--root` 前缀内外均无任何文件被创建、修改或删除（对比前后完整 inode + nlink + mtime + ctime + size + xattr 名称和值快照）。另对 `/tmp`、`/var/tmp` 与真实 HOME 下的 `Library/Logs`、`Library/Caches`、`Library/Preferences`、`Library/Application Support` 做浅层新条目兜底；它有意不覆盖既有条目修改或任意绝对路径。CI 在 macOS 15/26 以 `(deny file-write*)` sandbox 执行完整 scan，并用 START/END 日志哨兵断言 scan 的拒绝事件为零，证明产品没有吞掉失败的写尝试。
+1. **零写测试** ★ — HOME、TMPDIR/TMP/TEMP 与 XDG 写入位置全部重定向到 fixture 快照根内；全量 scan 后断言 `--root` 前缀内外均无任何文件被创建、修改或删除（对比前后完整 inode + nlink + mtime + ctime + size + xattr 名称和值快照）。另对 `/tmp`、`/var/tmp` 与真实 HOME 下的 `Library/Logs`、`Library/Caches`、`Library/Preferences`、`Library/Application Support` 做浅层新条目兜底；它有意不覆盖既有条目修改或任意绝对路径。CI 在 macOS 15/26 以 deny-write sandbox 执行完整 scan：只允许 Q34 的 `/dev/dtracehelper` exact operation，START/END 哨兵逐项匹配 token + operation + path，并断言 scan 的其他拒绝事件为零，证明产品没有吞掉失败的用户/系统数据写尝试。
 2. **副作用上限测试** ★ — 断言每个 probe 的实际外部命令调用次数不超过 side-effect registry 声明值；断言未声明的命令从未被调用。
 3. **APFS 反例测试** — `decisions.md` 附录 B 每个反例各一个测试：clone 双计、resource-fork-only（`allocated=2MiB, private=0`）、HFS 压缩（先创建 CPIO，再以 `ditto -x --hfsCompression` 构造）、hardlink 未完整覆盖时 floor 归零、稀疏文件只解释 logical gap。**构造失败一律 fail closed（Q31）** —— 测试必须失败，不得打印标记后 `return`。若某 runner 确实无法构造某反例，只能把该 fixture id 加入代码内的窄允许清单，并由锁定测试使清单变更可见；`--nocapture` 保留诊断输出不构成证据。
 4. **区间边界测试** — 逐条断言 §2.3 的五条边界规则；断言**不存在**任何输入使 `EF_MAY_SHARE_BLOCKS==0 && snapshots==0` 导致区间收敛。
@@ -605,7 +610,7 @@ cargo audit
 #   4. 文档中量化数字均来自 fixture 生成文件（§9.1）
 #   5. 两种架构产物的 Mach-O minimum OS version == macOS 13
 # crate root 强度：lib/bin 均 forbid disallowed_methods；该 lint 在 src/ 内零豁免
-# 系统调用级零写：macOS 15/26 均以 sandbox-exec 执行 scan，并断言唯一 token 的 deny 事件为零；不可用即失败
+# 系统调用级零写：macOS 15/26 均以 sandbox-exec 执行 scan；除 Q34 的精确 dyld 设备例外外，断言唯一 token 的 deny 事件为零；不可用即失败
 #   该门禁必须额外断言 scan 实际完成了测量（§9.0）：probe root 取物理路径，
 #   且断言 capacity region 为 complete。否则 root 初始化普遍失败时门禁仍会全绿。
 ```
@@ -720,6 +725,7 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | 通道 | 静态 | 符号锁 | 运行时 | registry | 专用证据 / 剩余空格 |
 |---|---|---|---|---|---|
 | safe `std` 文件写与元数据写 | 是 | — | 是 | — | Clippy 负向变异 + read-only harness + sandbox token |
+| dyld USDT/DOF 注册 `/dev/dtracehelper` | — | — | 精确允许 `file-write-data` | — | 平台 loader 行为；literal device + exact operation 是唯一 Seatbelt 例外，其他 `/dev` 写不允许 |
 | `getattrlist` | unsafe 仅限 `fsx/sys.rs` | 是 | 是 | — | Rust/C object 与 volume 差分、APFS fixtures；返回 mask/volume valid 逐项检查 |
 | `statfs` | 同上 | 是 | 是 | — | capacity fixture；仅作显式 basis 与 `SPACEUSED` 失败回退 |
 | `setiopolicy_np` | 同上 | 是 | 不适用（刻意修改进程策略） | — | atime/materialize/mount-trigger 三项均 set 后 get 验证；失败阻断 root |
@@ -733,7 +739,12 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | atime / 读诱发 metadata 写 | — | — | 是 | — | `VFS_ATIME_UPDATES_OFF` set+get |
 | autofs / mount trigger | — | — | sandbox 不证明 mount 状态 | — | `VFS_TRIGGER_RESOLVE_OFF` set+get；`EDEADLK`/失败令 root unknown |
 | nested mount 与 System/Data firmlink | — | — | — | — | 每对象比较真实 `(fsid,fileid)`，真实 fsid 改变即拒绝；synthetic boundary test |
-| 外部命令 / 子进程 | `Command` 仅 policy | — | 是 | 是 | P2 生产 registry 仍为空；本阶段产品不调用外部命令 |
+| 外部命令 / 子进程 | `Command` 仅 policy | — | P3 尚未接入 scan sandbox | 是 | P3 registry 精确锁定三条 Xcode probe；adapter 只能提交 `ProbeId`，不能提交程序、参数或用户输入 |
+| `/usr/bin/xcode-select -p` | `Command` 仅 policy | — | P3 尚未接入 scan sandbox | 是，max 1 | 生产 probe 测试实际执行；只判 selection，标准 CLT → `not_present` |
+| `/usr/bin/xcodebuild -version` | `Command` 仅 policy | — | P3 尚未接入 scan sandbox | 是，max 1 | 仅 selection 为完整 Xcode 候选后运行；固定 locale/清除重定向环境；未知版本降级 |
+| `/usr/bin/xcodebuild -checkFirstLaunchStatus` | `Command` 仅 policy | — | P3 尚未接入 scan sandbox | 是，max 1 | 仅已验证版本运行；非零为 `not_ready`，绝不调用写入型 `-runFirstLaunch` / `-license accept` |
+| P3 child stdout/stderr 与进程生命周期 | `Command` 仅 policy | — | P3 尚未接入 scan sandbox | 是 | 固定命令输出由 policy 捕获；命令 hang 的硬 timeout 留给 P4 `simctl` 接入前实现，当前为**未覆盖** |
+| P3 probe 诱发未沙箱化 daemon 状态变化 | — | — | 不覆盖 daemon | 是（只限制调用次数） | 本机未观察到启动 CoreSimulatorService；hosted 前后状态尚未机械验证，**未覆盖** |
 | build script | crate root 不覆盖 | 明确断言不存在 | sandbox 构建后不覆盖 | — | 新增前必须重新开门禁 |
 | dependency crate 内部写 | 不覆盖依赖源码 | 无直接 libc 只缩小本 crate FFI | 是（仅运行到的路径） | — | 未执行依赖路径与任意 daemon 写 **未覆盖** |
 | 继承的可写 fd（stdout/stderr 之外） | — | — | Seatbelt 不追溯 sandbox 前 fd | — | **未覆盖**；当前程序不接收或构造此类 fd |

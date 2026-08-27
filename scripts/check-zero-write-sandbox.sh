@@ -48,13 +48,16 @@ end_marker="$run_token-end"
 events="$probe_root/sandbox.ndjson"
 
 profile_for() {
-  printf '(version 1)(allow default)(deny file-write* (with message "%s"))' "$1"
+  printf '(version 1)(allow default)(deny file-write* (with message "%s"))(allow file-write-data (literal "/dev/dtracehelper"))' "$1"
 }
 
 wait_for_marker() {
   marker="$1"
+  operation="$2"
+  expected_path="$3"
+  escaped_path="${expected_path//\//\\/}"
   attempts=0
-  while ! grep -Fq "$marker" "$events"; do
+  while ! grep -F "$marker" "$events" | grep -F "$operation" | grep -Fq "$escaped_path"; do
     if ! kill -0 "$observer_pid" 2>/dev/null; then
       echo "sandbox violation observer exited before $marker" >&2
       exit 1
@@ -85,7 +88,7 @@ if [[ $mutation_status -ne 0 || -e "$probe_root/home/.sizetrail-mutation" ]]; th
   echo "sandbox observer probe did not swallow a rejected write as expected" >&2
   exit 1
 fi
-wait_for_marker "$start_marker"
+wait_for_marker "$start_marker" "file-write-create" "$probe_root/home/.sizetrail-mutation"
 
 set +e
 /usr/bin/env "${environment[@]}" "$sandbox" -p "$(profile_for "$scan_marker")" \
@@ -122,7 +125,7 @@ if [[ $end_status -eq 0 || -e "$probe_root/end-mutation" ]]; then
   echo "deny-write sandbox did not reject its end marker" >&2
   exit 1
 fi
-wait_for_marker "$end_marker"
+wait_for_marker "$end_marker" "file-write-create" "$probe_root/end-mutation"
 
 if grep -Fq "$scan_marker" "$events"; then
   grep -F "$scan_marker" "$events" >&2

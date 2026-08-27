@@ -702,6 +702,38 @@ P1.1–P1.3 修掉的多数缺口也属此类（`expect` 绕过、`deny` 可降�
 
 ---
 
+## Q34 — dyld DOF 注册不是用户数据写入
+
+**决策：零写 Seatbelt profile 对 `/dev/dtracehelper` 上的 `file-write-data` 设置唯一精确允许项；其他 `file-write*` 继续全部拒绝。公开安全属性收窄为「SizeTrail 不向用户或系统数据路径发起写操作」，不再声称平台 loader 从未以写模式打开任何设备。**
+
+2026-08-28 实测发现，macOS dyld 为用户态静态 DTrace probe 注册 DOF 时会以 `O_RDWR` 打开 `/dev/dtracehelper` 并提交 ioctl。该行为与 SizeTrail 扫描逻辑无关：macOS 27 上 `/usr/bin/true`、`/bin/df`、`sizetrail --help` 与完整 scan 均产生同一 Sandbox `file-write-data` 事件。Apple dyld 源码的 `RuntimeState::notifyDtrace` / `notifyDtrace` 路径与本机 Mach-O `__dof_*` section 检查互相印证。hosted macOS 15/26 的哨兵 shell 同样产生该事件；当前 SizeTrail 主进程尚未触发，但 P3 起的外部子进程会重新打开这个平台通道。
+
+这不修改任何用户或系统数据，目标是字符设备而非数据路径。把它继续计为产品写尝试会让“零写”门禁依赖 dyld image 组成并在加入只读子进程后必然误报；事后忽略任意 scan event 又会制造真正的盲区。因此允许项必须同时限定 operation 与 literal path，不能按进程名、token 或任意 `/dev` 范围放宽。
+
+Q28 的哨兵同时收紧：START/END 不得只匹配 message token，必须在同一事件中匹配预期的 `file-write-create` 与精确目标路径，否则更早的 loader 设备事件会伪装成“mutation probe 已执行”。
+
+被否：保留字面上的“任何 file-write 尝试为零”（事实错误）；事后过滤所有 `/dev` 或所有子进程 violation（形成宽盲区）；删除系统调用级门禁（证据倒退）。
+
+影响：Q27/Q28 的证据解释；`SPEC.md` §8.1、§10.2、§10.3、§12 通道矩阵；`scripts/check-zero-write-sandbox.sh`。
+
+---
+
+## Q35 — Xcode probe 用绝对闭集，不调用 `which`
+
+**决策：P3 的 Xcode/CoreSimulator presence/version probe 固定为三个 registry 项：`/usr/bin/xcode-select -p`、`/usr/bin/xcodebuild -version`、`/usr/bin/xcodebuild -checkFirstLaunchStatus`，各每次扫描最多一次；固定 `LANG=C` / `LC_ALL=C`，并移除会重定向 developer tool resolution 的环境变量。绝对平台命令不再额外调用 `which`。**
+
+`which` 只能证明 PATH 中存在一个名字，不能证明 developer-tool shim 背后的完整 Xcode 可用。实测只有 Command Line Tools 时 `/usr/bin/xcodebuild` 文件存在，但 `xcodebuild -version` 退出 1；`xcode-select -p` 返回 `/Library/Developer/CommandLineTools`。无效 `DEVELOPER_DIR` 又可能让 `xcode-select -p` 返回一个不存在的路径。故 presence 必须由 selection + 实际只读 probe 的 typed 结果决定，不能由文件存在或英文 stderr 单独推断。
+
+状态映射：无 selection 或标准 CLT selection → `not_present`；非 Xcode selection、版本输出不可解析、命令失败 → typed degraded；版本不在 hosted 验证集合 → `unknown_version`；first-launch/license 检查非零 → `not_ready`。P3 不调用 `xcrun` / `simctl`；任何 `simctl` 命令留到 P4，并按可能启动 CoreSimulatorService 的 daemon-capable probe 处理。
+
+当前验证集合绑定 hosted image：macOS 15 默认 Xcode `16.4 (16F6)`，macOS 26 默认 Xcode `26.5 (17F42)`。runner 轮换必须显式更新 registry 测试与支持证据；不得把范围外版本当 ready。
+
+被否：每条固定绝对命令前再调用 `which`（增加 PATH 敏感的子进程却不增加证据）；以 `xcrun --version` 代替 Xcode 版本（它报告 CLT/xcrun 版本）；P3 提前调用 `simctl list`（启动/连接 daemon，属于 P4 inventory）。
+
+影响：`SPEC.md` §3.4、§5.2、§8.2、§12 通道矩阵；`src/policy.rs` 与 `src/adapters/xcode.rs`。
+
+---
+
 ## 附录 A — 实测环境基线
 
 采集于 2026-08-26，作为规则表量级参考与回归基线：
