@@ -59,14 +59,14 @@ jobs:
           bash scripts/check-minimum-macos.sh target/aarch64-apple-darwin/release/sizetrail arm64
           bash scripts/check-minimum-macos.sh target/x86_64-apple-darwin/release/sizetrail x86_64
 
-      - name: Install dependency policy tools
+      - name: Dependency license and source policy
         if: matrix.macos == 15
-        run: |
-          cargo install cargo-deny --version 0.20.2 --locked
-          cargo install cargo-audit --version 0.22.2 --locked
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          rust-version: "1.98.0"
 
-      - name: Dependency policy
+      - name: Dependency vulnerability audit
         if: matrix.macos == 15
-        run: |
-          cargo deny check
-          cargo audit
+        uses: actions-rust-lang/audit@v1
+        with:
+          createIssues: false
