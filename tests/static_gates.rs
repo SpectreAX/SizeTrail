@@ -376,3 +376,25 @@ fn minimum_macos_gate_rejects_newer_deployment_target() {
 
     assert_rejected(output, "minimum macOS gate");
 }
+
+#[test]
+fn sandbox_gate_rejects_a_swallowed_hard_coded_write() {
+    let fixture = TempDir::new().expect("sandbox fixture must be created");
+    let fake_binary = fixture.path().join("sizetrail-mutation");
+    fs::write(
+        &fake_binary,
+        "#!/bin/sh\n: > /tmp/sizetrail-smuggled-sandbox-probe 2>/dev/null || true\nprintf '{\"schema_version\":\"0.1.0-unstable\"}\\n'\nexit 0\n",
+    )
+    .expect("mutation binary must be written");
+    fs::set_permissions(&fake_binary, fs::Permissions::from_mode(0o755))
+        .expect("mutation binary must be executable");
+
+    assert_rejected(
+        run_script(
+            "check-zero-write-sandbox.sh",
+            fixture.path(),
+            [fake_binary.as_os_str()],
+        ),
+        "sandbox write-attempt gate",
+    );
+}
