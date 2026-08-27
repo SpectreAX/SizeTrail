@@ -1,0 +1,22 @@
+{
+  "schema_version": "0.1.0-unstable",
+  "environment": {
+    "generated_at_unix_seconds": 1800000000,
+    "hostname": "fixture-host",
+    "home": "/Users/fixture",
+    "tool_versions": {}
+  },
+  "payload": {
+    "regions": [],
+    "findings": [],
+    "coverage_gaps": [
+      {
+        "id": "p1.toolchain_adapters",
+        "plane": "toolchain_attribution",
+        "region": "toolchain_adapters",
+        "status": "unmeasurable",
+        "reason": "no_adapters_compiled"
+      }
+    ]
+  }
+}
