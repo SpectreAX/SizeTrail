@@ -132,6 +132,25 @@ fn clippy_disallowed_policy_is_an_exact_reviewed_set() {
 }
 
 #[test]
+fn fsx_extern_symbols_are_an_exact_reviewed_set() {
+    let source = fs::read_to_string(repository_root().join("src/fsx/sys.rs"))
+        .expect("fsx syscall boundary must be readable");
+    let declared: BTreeSet<&str> = source
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("fn "))
+        .filter_map(|declaration| declaration.split_once('(').map(|(name, _)| name))
+        .collect();
+    let expected = BTreeSet::from([
+        "getattrlist",
+        "getiopolicy_np",
+        "setiopolicy_np",
+        "statfs",
+    ]);
+
+    assert_eq!(declared, expected);
+}
+
+#[test]
 fn crate_roots_forbid_disallowed_methods() {
     for crate_root in ["src/lib.rs", "src/main.rs"] {
         let source = fs::read_to_string(repository_root().join(crate_root))
