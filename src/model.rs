@@ -153,3 +153,93 @@ pub struct CoverageGap {
 pub enum CoverageGapReason {
     NoAdaptersCompiled,
 }
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct FileIdentity {
+    pub fsid: [i32; 2],
+    pub fileid: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExtentKind {
+    FileForks,
+    Directory,
+    Other,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StorageSignal {
+    MayShareBlocks(bool),
+    VolumeHasSnapshots(bool),
+    ResourceForkAllocated,
+    FilesystemCompressed,
+    Sparse,
+    Purgeable,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExtentObservation {
+    pub identity: FileIdentity,
+    pub kind: ExtentKind,
+    pub link_count: u64,
+    pub covered_link_count: u64,
+    pub allocated_bytes: Option<u64>,
+    pub private_bytes: Option<u64>,
+    pub signals: Vec<StorageSignal>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DispositionEstimate {
+    pub floor_bytes: u64,
+    pub ceiling_bytes: Option<u64>,
+    pub has_unmeasurable_objects: bool,
+    pub unexplained_private_gap: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MeasurementOverflow;
+
+pub fn estimate_disposition(
+    observations: &[ExtentObservation],
+    snapshots_stable: bool,
+) -> Result<DispositionEstimate, MeasurementOverflow> {
+    let mut unique = BTreeMap::new();
+    for observation in observations {
+        if observation.kind == ExtentKind::FileForks {
+            unique.entry(observation.identity).or_insert(observation);
+        }
+    }
+
+    let mut floor_bytes = 0_u64;
+    let mut ceiling_bytes = Some(0_u64);
+    let mut has_unmeasurable_objects = false;
+
+    for observation in unique.values() {
+        if snapshots_stable && observation.covered_link_count >= observation.link_count {
+            match observation.private_bytes {
+                Some(bytes) => {
+                    floor_bytes = floor_bytes.checked_add(bytes).ok_or(MeasurementOverflow)?;
+                }
+                None => has_unmeasurable_objects = true,
+            }
+        }
+
+        match (ceiling_bytes, observation.allocated_bytes) {
+            (Some(total), Some(bytes)) => {
+                ceiling_bytes = Some(total.checked_add(bytes).ok_or(MeasurementOverflow)?);
+            }
+            (_, None) => {
+                ceiling_bytes = None;
+                has_unmeasurable_objects = true;
+            }
+            (None, Some(_)) => {}
+        }
+    }
+
+    Ok(DispositionEstimate {
+        floor_bytes,
+        ceiling_bytes,
+        has_unmeasurable_objects,
+        unexplained_private_gap: true,
+    })
+}

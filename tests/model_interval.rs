@@ -25,11 +25,12 @@ fn incomplete_hardlink_scope_has_zero_floor_and_complete_scope_is_deduplicated()
     let mut second = first.clone();
     second.covered_link_count = 2;
 
-    let incomplete = estimate_disposition(&[first], true);
+    let incomplete = estimate_disposition(&[first], true).expect("estimate must fit");
     assert_eq!(incomplete.floor_bytes, 0);
     assert_eq!(incomplete.ceiling_bytes, Some(2_048));
 
-    let complete = estimate_disposition(&[second.clone(), second], true);
+    let complete =
+        estimate_disposition(&[second.clone(), second], true).expect("estimate must fit");
     assert_eq!(complete.floor_bytes, 1_024);
     assert_eq!(complete.ceiling_bytes, Some(2_048));
 }
@@ -42,7 +43,7 @@ fn identity_uses_fsid_and_fileid_together() {
     first.private_bytes = Some(100);
     second.private_bytes = Some(200);
 
-    let estimate = estimate_disposition(&[first, second], true);
+    let estimate = estimate_disposition(&[first, second], true).expect("estimate must fit");
     assert_eq!(estimate.floor_bytes, 300);
     assert_eq!(estimate.ceiling_bytes, Some(4_096));
 }
@@ -56,7 +57,7 @@ fn missing_allocated_makes_ceiling_unknown_and_non_file_data_is_excluded() {
     directory.allocated_bytes = Some(u64::MAX);
     directory.private_bytes = Some(u64::MAX);
 
-    let estimate = estimate_disposition(&[missing, directory], true);
+    let estimate = estimate_disposition(&[missing, directory], true).expect("estimate must fit");
     assert_eq!(estimate.floor_bytes, 1_024);
     assert_eq!(estimate.ceiling_bytes, None);
     assert!(estimate.has_unmeasurable_objects);
@@ -64,7 +65,7 @@ fn missing_allocated_makes_ceiling_unknown_and_non_file_data_is_excluded() {
 
 #[test]
 fn snapshots_may_invalidate_only_the_floor() {
-    let estimate = estimate_disposition(&[object(1)], false);
+    let estimate = estimate_disposition(&[object(1)], false).expect("estimate must fit");
     assert_eq!(estimate.floor_bytes, 0);
     assert_eq!(estimate.ceiling_bytes, Some(2_048));
 }
@@ -78,7 +79,7 @@ fn negative_sharing_signals_never_collapse_the_interval() {
         StorageSignal::VolumeHasSnapshots(false),
     ];
 
-    let estimate = estimate_disposition(&[measured], true);
+    let estimate = estimate_disposition(&[measured], true).expect("estimate must fit");
     assert_eq!(estimate.floor_bytes, 0);
     assert_eq!(estimate.ceiling_bytes, Some(2_048));
     assert!(estimate.unexplained_private_gap);
@@ -96,7 +97,7 @@ fn signals_are_labels_and_never_arithmetic_inputs() {
     ];
 
     assert_eq!(
-        estimate_disposition(&[plain], true),
-        estimate_disposition(&[signaled], true)
+        estimate_disposition(&[plain], true).expect("estimate must fit"),
+        estimate_disposition(&[signaled], true).expect("estimate must fit")
     );
 }
