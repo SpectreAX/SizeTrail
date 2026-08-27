@@ -1,0 +1,27 @@
+disallowed-methods = [
+  { path = "std::fs::copy", reason = "SizeTrail never writes user or system data" },
+  { path = "std::fs::create_dir", reason = "SizeTrail never writes user or system data" },
+  { path = "std::fs::create_dir_all", reason = "SizeTrail never writes user or system data" },
+  { path = "std::fs::hard_link", reason = "SizeTrail never writes user or system data" },
+  { path = "std::fs::remove_dir", reason = "SizeTrail never writes user or system data" },
+  { path = "std::fs::remove_dir_all", reason = "SizeTrail never writes user or system data" },
+  { path = "std::fs::remove_file", reason = "SizeTrail never writes user or system data" },
+  { path = "std::fs::rename", reason = "SizeTrail never writes user or system data" },
+  { path = "std::fs::set_permissions", reason = "SizeTrail never writes user or system data" },
+  { path = "std::fs::write", reason = "SizeTrail never writes user or system data" },
+  { path = "std::fs::File::create", reason = "SizeTrail never writes user or system data" },
+  { path = "std::fs::File::create_new", reason = "SizeTrail never writes user or system data" },
+  { path = "std::fs::File::set_len", reason = "SizeTrail never writes user or system data" },
+  { path = "std::fs::File::set_permissions", reason = "SizeTrail never writes user or system data" },
+  { path = "std::fs::OpenOptions::append", reason = "SizeTrail never opens writable files" },
+  { path = "std::fs::OpenOptions::create", reason = "SizeTrail never opens writable files" },
+  { path = "std::fs::OpenOptions::create_new", reason = "SizeTrail never opens writable files" },
+  { path = "std::fs::OpenOptions::truncate", reason = "SizeTrail never opens writable files" },
+  { path = "std::fs::OpenOptions::write", reason = "SizeTrail never opens writable files" },
+  { path = "std::os::unix::fs::symlink", reason = "SizeTrail never writes user or system data" },
+]
+
+disallowed-types = [
+  { path = "std::process::Command", reason = "external commands are confined to src/policy.rs" },
+]
+

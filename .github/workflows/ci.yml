@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+jobs:
+  test:
+    name: macOS ${{ matrix.macos }} arm64
+    runs-on: macos-${{ matrix.macos }}
+    strategy:
+      fail-fast: false
+      matrix:
+        macos: [15, 26]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: clippy,rustfmt
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy and zero-write API gate
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Policy command boundary
+        run: bash scripts/check-policy-boundary.sh
+
+      - name: Truth-contract claim patterns
+        run: bash scripts/check-claim-patterns.sh
+
+      - name: Tests
+        run: cargo test --all
+
+      - name: Fixture-generated quantitative documentation
+        run: |
+          cargo test --test generate_docs -- --ignored
+          bash scripts/check-quantitative-docs.sh
+          git diff --exit-code -- docs/generated
+
+      - name: Build both supported architectures
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+
+      - name: Mach-O minimum macOS gate
+        run: |
+          bash scripts/check-minimum-macos.sh target/aarch64-apple-darwin/release/sizetrail arm64
+          bash scripts/check-minimum-macos.sh target/x86_64-apple-darwin/release/sizetrail x86_64
+
+      - name: Install dependency policy tools
+        if: matrix.macos == 15
+        run: |
+          cargo install cargo-deny --version 0.20.2 --locked
+          cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: Dependency policy
+        if: matrix.macos == 15
+        run: |
+          cargo deny check
+          cargo audit
