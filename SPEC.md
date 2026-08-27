@@ -443,6 +443,7 @@ enum Advice {
 1. 整个 crate 不存在 `fs::write`、`fs::remove_*`、`fs::rename`、`File::create`、`OpenOptions::write/append/create`。唯一输出是 stdout / stderr。
 2. 无操作日志文件、无缓存文件、无配置文件、无 `completion` 写盘（Q17 / Q20 / Q22）。
 3. **可机械验证的安全属性：正常运行不产生任何文件系统或外部工具写操作。** CI 静态检查 + 运行时 trace 双重验证（§10.2 第 1、2 条）。
+4. **`src/fsx/sys.rs` 是唯一 unsafe 豁免点。** 该模块只导出只读系统调用包装，公开签名不得暴露可写句柄、可变缓冲区、写入 flag 或执行任意系统调用的能力；其他文件不得抑制 `unsafe_code` lint。模块内部无法由 Clippy 的 Rust API 禁用表证明零写，**其零写保证明确且仅由 §10.2 第 1 条运行时 harness 覆盖**。P1.1 只建立此边界，不实现 `getattrlist`。
 
 ### 8.2 副作用闸门（`policy` 层）
 
@@ -486,6 +487,8 @@ enum Advice {
 1. **声明模式 linter**：在 README、文档与站点文案中 grep 禁用模式。
 2. **数字来源断言**：文档中每个公开量化数字必须来自 fixture 生成的文件。
 3. **coverage/unknown 基线**：每次发布生成并保存基线。
+
+P4 编写 README 与公开文档时，数字来源断言只能按以下方向演进：对版本号、章节号、日期建立**窄允许清单**；fixture 生成片段按显式标记转写并逐字节比对。**未经 decision record 直接放宽或绕过该检查，即为 truth contract 失效。** P1.1 仅记录此约束，不提前实现 transclusion。
 
 ### 9.2 禁用的声明模式（非穷尽）
 
@@ -662,6 +665,7 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 |---|---|---|
 | **P0** ✅ | 需求固化 | `decisions.md` 已产出，Q0–Q26 全部消解，frontier 为空 |
 | **P1** | truth harness 与计量 schema | repo、CI 全绿、§10.3 五项自定义静态检查就位；空 side-effect registry、运行时计数器及 §10.2 的 1、2 号测试通过；此时无任何 adapter |
+| **P1.1** | truth gate hardening | 五项自定义静态检查各有负向测试；零写与命令边界缺口关闭；side-effect registry 成为生产唯一来源；unsafe 唯一豁免边界与强化快照就位；此时仍无任何 adapter 或 FFI 实现 |
 | **P2** | read-only Root/fsx/capacity | §10.2 的 3、4、5 号测试通过（全部 APFS 反例）；plane 1 逐数字口径标注完成 |
 | **P3** | typed adapter contract | 契约 trait 冻结；`not_present` / 未知版本降级路径有测试；adapter 的真实 probe 注册进 P1 已建立的 side-effect registry |
 | **P4** | 两个深 adapter + CLI/JSON | Xcode/CoreSimulator、Homebrew；§10.2 全部 13 项通过；§10.4 人工验证完成 → **发布 v0.1 技术预览（schema 明确不稳定）** |
