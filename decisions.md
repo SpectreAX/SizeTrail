@@ -1,6 +1,6 @@
 # SizeTrail 决策记录（Decision Record）
 
-> 本文是 **P0 阶段的产物**，记录 Q0–Q26 全部已消解决策、被否方案与理由。
+> 本文起源于 **P0 阶段**，记录 Q0–Q26 及实现期新增决策、被否方案与理由。
 >
 > **`SPEC.md` 由本文派生。** 两者冲突时，**本文优先** —— SPEC 是本文的规格化表达，不是独立来源。
 > 新决策先写入本文并编号，再更新 SPEC。不允许 SPEC 携带本文没有的决策。
@@ -9,7 +9,7 @@
 |---|---|
 | 产品名 | SizeTrail |
 | 命令 | `sizetrail`（唯一二进制，无短别名） |
-| 决策轮次 | Q0–Q26，全部已消解 |
+| 决策轮次 | Q0–Q27，全部已消解 |
 | 记录日期 | 2026-08-27 |
 | 状态 | frontier 为空，P0 完成，可进入 P1 |
 
@@ -576,6 +576,24 @@ mole 是 **GPL-3.0**，已有 65k star。两点必须遵守：
 2. mole 的 README 要求派生产品换名并注明来源。SizeTrail 已换名；README 应致谢 mole 为灵感来源。
 
 被否：B（仅 MIT）、C（仅 Apache-2.0）。
+
+---
+
+## Q27 — 零写强声明的系统调用级证据
+
+**决策：保留 §8.1 的强声明，并在 macOS 15/26 CI 中用 `sandbox-exec` 的 `(deny file-write*)` profile 执行完整 scan。**
+
+证据：2026-08-27 在 GitHub hosted `macos-15`（15.7.7）与 `macos-26`（26.5.2）标准 arm64 runner 实测，`/usr/bin/sandbox-exec` 均存在，`(version 1)(allow default)(deny file-write*)` 可解析；对重定向 HOME 与 TMPDIR 的写尝试均返回 `Operation not permitted` 且未创建文件；当前 `sizetrail scan --json` 在同一 profile 下成功。该 CI 必须 fail closed：命令缺失、profile 失效、写入尝试或 scan 无法在零写 sandbox 下完成，均令门禁失败。
+
+`sandbox-exec` 与 profile 语言已 deprecated，不视为永久稳定 API。其可用性由每次目标 runner CI 重新证明；若任一已验证 runner 不再支持，必须重新进入决策，不能静默删除门禁而保留强声明。
+
+被否方案：
+
+- **仅靠 tempdir 树快照而保留原声明。** 变异测试已证明真实 HOME 可落在快照根之外，证据不足。
+- **改弱为“受控 fixture 内未观测到写”。** 当前目标 runner 已能提供覆盖目标进程及其子进程任意路径写尝试的系统调用级强制，现阶段无需降级声明。
+- **其他无特权观察器。** EndpointSecurity 需要受限 entitlement、FDA 与特权客户端；FSEvents/kqueue 只能观察部分成功变化；OpenBSM/ktrace 需要特权；App Sandbox 无法兼容任意开发者路径扫描。它们均不能替代本门禁。
+
+影响：`SPEC.md` §8.1、§10.2、§10.3 与 §12；P1.2 同时要求 HOME/TMP/XDG 写入位置重定向和快照 harness，作为 sandbox 之外的可诊断第二证据层。
 
 ---
 

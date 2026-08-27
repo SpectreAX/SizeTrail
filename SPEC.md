@@ -442,7 +442,7 @@ enum Advice {
 
 1. 整个 crate 不存在 `fs::write`、`fs::remove_*`、`fs::rename`、`File::create`、`OpenOptions::write/append/create`。唯一输出是 stdout / stderr。
 2. 无操作日志文件、无缓存文件、无配置文件、无 `completion` 写盘（Q17 / Q20 / Q22）。
-3. **可机械验证的安全属性：正常运行不产生任何文件系统或外部工具写操作。** CI 静态检查 + 运行时 trace 双重验证（§10.2 第 1、2 条）。
+3. **可机械验证的安全属性：正常运行不产生任何文件系统或外部工具写操作。** CI 静态 API 门禁 + 重定向写入位置环境变量的运行时快照 + macOS 15/26 上 `sandbox-exec` 的 `(deny file-write*)` 系统调用级强制，共同验证 §10.2 第 1、2 条。sandbox 门禁必须 fail closed；若目标 runner 不再支持该 deprecated 机制，必须先通过 decision record 重定证据或收窄声明，不得静默删除门禁。
 4. **`src/fsx/sys.rs` 是唯一 unsafe 豁免点。** 该模块只导出只读系统调用包装，公开签名不得暴露可写句柄、可变缓冲区、写入 flag 或执行任意系统调用的能力；其他文件不得抑制 `unsafe_code` lint。模块内部无法由 Clippy 的 Rust API 禁用表证明零写，**其零写保证明确且仅由 §10.2 第 1 条运行时 harness 覆盖**。P1.1 只建立此边界，不实现 `getattrlist`。
 
 ### 8.2 副作用闸门（`policy` 层）
@@ -530,7 +530,7 @@ GA runner 记录 fixture benchmark，但**只发布「该 runner image + fixture
 
 **这些是「防止说谎」与「防止副作用」测试，缺一不可。**
 
-1. **零写测试** ★ — 全量 scan 后断言 `--root` 前缀内外均无任何文件被创建、修改或删除（对比前后完整 inode + mtime + size 快照）。
+1. **零写测试** ★ — HOME、TMPDIR/TMP/TEMP 与 XDG 写入位置全部重定向到 fixture 快照根内；全量 scan 后断言 `--root` 前缀内外均无任何文件被创建、修改或删除（对比前后完整 inode + nlink + mtime + ctime + size + xattr 名称和值快照）。CI 另在 macOS 15/26 以 `(deny file-write*)` sandbox 执行完整 scan，证明任意路径的写尝试会被内核拒绝。
 2. **副作用上限测试** ★ — 断言每个 probe 的实际外部命令调用次数不超过 side-effect registry 声明值；断言未声明的命令从未被调用。
 3. **APFS 反例测试** — `decisions.md` 附录 B 每个反例各一个测试：clone 双计、resource-fork-only（`allocated=2MiB, private=0`）、HFS 压缩（`ditto -x --hfsCompression` 构造）、hardlink 未完整覆盖时 floor 归零、稀疏文件只解释 logical gap。
 4. **区间边界测试** — 逐条断言 §2.3 的五条边界规则；断言**不存在**任何输入使 `EF_MAY_SHARE_BLOCKS==0 && snapshots==0` 导致区间收敛。
@@ -558,6 +558,7 @@ cargo audit
 #   3. truth contract 声明模式 linter（§9.1）
 #   4. 文档中量化数字均来自 fixture 生成文件（§9.1）
 #   5. 两种架构产物的 Mach-O minimum OS version == macOS 13
+# 系统调用级零写：macOS 15/26 均以 sandbox-exec (deny file-write*) 执行 scan；不可用即失败
 ```
 
 矩阵见 §5.3。**支持表由该 workflow 生成，不手写。**
@@ -666,6 +667,7 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | **P0** ✅ | 需求固化 | `decisions.md` 已产出，Q0–Q26 全部消解，frontier 为空 |
 | **P1** | truth harness 与计量 schema | repo、CI 全绿、§10.3 五项自定义静态检查就位；空 side-effect registry、运行时计数器及 §10.2 的 1、2 号测试通过；此时无任何 adapter |
 | **P1.1** | truth gate hardening | 五项自定义静态检查各有负向测试；零写与命令边界缺口关闭；side-effect registry 成为生产唯一来源；unsafe 唯一豁免边界与强化快照就位；此时仍无任何 adapter 或 FFI 实现 |
+| **P1.2** | control-integrity hardening | HOME/TMP/XDG 隔离与越界变异测试；Clippy 禁用集合精确锁定；locked metadata 与生成文档漂移负向测试；macOS 15/26 deny-write sandbox 证明 §8.1 强声明；此时仍不进入 P2 |
 | **P2** | read-only Root/fsx/capacity | §10.2 的 3、4、5 号测试通过（全部 APFS 反例）；plane 1 逐数字口径标注完成 |
 | **P3** | typed adapter contract | 契约 trait 冻结；`not_present` / 未知版本降级路径有测试；adapter 的真实 probe 注册进 P1 已建立的 side-effect registry |
 | **P4** | 两个深 adapter + CLI/JSON | Xcode/CoreSimulator、Homebrew；§10.2 全部 13 项通过；§10.4 人工验证完成 → **发布 v0.1 技术预览（schema 明确不稳定）** |
