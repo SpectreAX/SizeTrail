@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -28,31 +32,36 @@ jobs:
           components: clippy,rustfmt
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
+      - name: Locked dependency graph
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
       - name: Format
         run: cargo fmt --check
 
       - name: Clippy and zero-write API gate
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
-      - name: Policy command boundary
-        run: bash scripts/check-policy-boundary.sh
+      - name: Lint suppression boundaries
+        run: |
+          bash scripts/check-policy-boundary.sh clippy::disallowed_types src/policy.rs src clippy::style clippy::all clippy::disallowed_type warnings
+          bash scripts/check-policy-boundary.sh unsafe_code src/fsx/sys.rs src warnings
 
       - name: Truth-contract claim patterns
         run: bash scripts/check-claim-patterns.sh
 
       - name: Tests
-        run: cargo test --all
+        run: cargo test --locked --all
 
       - name: Fixture-generated quantitative documentation
         run: |
-          cargo test --test generate_docs -- --ignored
+          cargo test --locked --test generate_docs -- --ignored
           bash scripts/check-quantitative-docs.sh
           git diff --exit-code -- docs/generated
 
       - name: Build both supported architectures
         run: |
-          cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
+          cargo build --locked --release --target aarch64-apple-darwin
+          cargo build --locked --release --target x86_64-apple-darwin
 
       - name: Mach-O minimum macOS gate
         run: |
@@ -68,5 +77,5 @@ jobs:
       - name: Dependency policy
         if: matrix.macos == 15
         run: |
-          cargo deny check
-          cargo audit
+          cargo deny --locked check
+          cargo audit --file Cargo.lock
