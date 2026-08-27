@@ -4,10 +4,16 @@ mod support;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use std::process::Command;
+use std::sync::Mutex;
 use support::{HighValueEntrySnapshot, ReadOnlyFixture};
+
+static REAL_PATH_SNAPSHOT_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn scan_does_not_change_the_fixture_inside_or_outside_root() {
+    let _real_path_guard = REAL_PATH_SNAPSHOT_LOCK
+        .lock()
+        .expect("real-path snapshot lock must be available");
     let fixture = ReadOnlyFixture::create().expect("fixture must be created");
     let before = fixture.snapshot().expect("baseline snapshot must succeed");
     let real_home = std::env::var_os("HOME").map(std::path::PathBuf::from);
@@ -51,6 +57,9 @@ fn harness_detects_a_home_derived_write() {
 
 #[test]
 fn high_value_fallback_detects_a_hard_coded_tmp_write() {
+    let _real_path_guard = REAL_PATH_SNAPSHOT_LOCK
+        .lock()
+        .expect("real-path snapshot lock must be available");
     let before = HighValueEntrySnapshot::capture(None).expect("fallback baseline must succeed");
     let probe = std::path::PathBuf::from(format!(
         "/tmp/sizetrail-hard-coded-mutation-{}",
