@@ -75,6 +75,20 @@ mole 已有 allocated-size、硬链接去重、purgeable 标量与若干 insight
 
 **为什么 plane 1 必须逐个数字声明口径：** Apple 自己的 `df` 就有多口径。`df.c` 的 `usedblks()` 以 `getattrlist(ATTR_VOL_SPACEUSED)` 为主，`f_blocks - f_bfree` 仅为失败回退；且 `availblks = f_bavail + used`，连容量百分比的分母都不是容器总量。
 
+**P2 的机器可读口径表：** 每个已测数字在 JSON 中携带以下 `basis`；未测量项不伪造数字或近似 basis。
+
+| 数字 | 主口径 | 回退 / 能力门控 |
+|---|---|---|
+| container allocated | `statfs: (f_blocks - f_bfree) × f_bsize` | 仅在 `VOL_CAP_FMT_SHARED_SPACE` 的 capability 与 valid 位同时存在时称为 container；否则 unmeasurable |
+| volume size | `getattrlist: ATTR_VOL_SIZE` | `statfs: f_blocks × f_bsize` |
+| volume used | `getattrlist: ATTR_VOL_SPACEUSED` | 仅当前者未返回时用 `statfs: (f_blocks - f_bfree) × f_bsize`，JSON 明示回退 |
+| volume free | `getattrlist: ATTR_VOL_SPACEFREE` | `statfs: f_bfree × f_bsize` |
+| normal available | `getattrlist: ATTR_VOL_SPACEAVAIL` | `statfs: f_bavail × f_bsize` |
+| important available | CoreFoundation `kCFURLVolumeAvailableCapacityForImportantUsageKey` | 属性不可用即 unmeasurable |
+| opportunistic available | CoreFoundation `kCFURLVolumeAvailableCapacityForOpportunisticUsageKey` | 属性不可用即 unmeasurable |
+
+`container allocated` 与 `volume used` 即使数值偶然相等也不得合并；它们的 scope 与 basis 不同。
+
 ### 2.2 三个必须正确处理的计量陷阱
 
 **(1) `st_blocks` 是 allocated footprint，不是物理占用。** 它解决稀疏文件但**不解决 clone**。实测：20MB 文件 `cp -c` 后两文件各报 `blocks=40960`，`du -sk` 对约 20MB 物理占用报 40MB。
@@ -327,6 +341,8 @@ tests/
 
 **`--root` 沙箱保留。** 永久只读后它不再是删除防护，而是**测试注入机制** —— 引擎全程只通过可注入的 `Root` 抽象访问文件系统，使 fixture 测试无需真实 HOME。这条能力是 §10 测试策略成立的前提。
 
+Root 的路径读取以 `FSOPT_NOFOLLOW_ANY` 拒绝任意位置的 symlink（该 flag 已存在于 Ventura 的 XNU 8792），不能仅靠词法 `starts_with`；后者无法阻止 `root/link/outside` 在同一物理卷上越界。每个成功读取的对象仍须比较真实 fsid，以独立拒绝 nested mount 与 System/Data firmlink 边界。
+
 ---
 
 ## 6. 规则表：数据而非代码
@@ -534,7 +550,7 @@ GA runner 记录 fixture benchmark，但**只发布「该 runner image + fixture
 
 1. **零写测试** ★ — HOME、TMPDIR/TMP/TEMP 与 XDG 写入位置全部重定向到 fixture 快照根内；全量 scan 后断言 `--root` 前缀内外均无任何文件被创建、修改或删除（对比前后完整 inode + nlink + mtime + ctime + size + xattr 名称和值快照）。另对 `/tmp`、`/var/tmp` 与真实 HOME 下的 `Library/Logs`、`Library/Caches`、`Library/Preferences`、`Library/Application Support` 做浅层新条目兜底；它有意不覆盖既有条目修改或任意绝对路径。CI 在 macOS 15/26 以 `(deny file-write*)` sandbox 执行完整 scan，并用 START/END 日志哨兵断言 scan 的拒绝事件为零，证明产品没有吞掉失败的写尝试。
 2. **副作用上限测试** ★ — 断言每个 probe 的实际外部命令调用次数不超过 side-effect registry 声明值；断言未声明的命令从未被调用。
-3. **APFS 反例测试** — `decisions.md` 附录 B 每个反例各一个测试：clone 双计、resource-fork-only（`allocated=2MiB, private=0`）、HFS 压缩（`ditto -x --hfsCompression` 构造）、hardlink 未完整覆盖时 floor 归零、稀疏文件只解释 logical gap。
+3. **APFS 反例测试** — `decisions.md` 附录 B 每个反例各一个测试：clone 双计、resource-fork-only（`allocated=2MiB, private=0`）、HFS 压缩（先创建 CPIO，再以 `ditto -x --hfsCompression` 构造）、hardlink 未完整覆盖时 floor 归零、稀疏文件只解释 logical gap。构造失败不得静默 skip：测试必须打印 `SIZETRAIL_P2_COVERAGE_GAP` 及 fixture id/原因，CI 以 `--nocapture` 保留报告；对应 runner 在获得真机证据前只能记为覆盖缺口，不能由绿色状态暗示已验证。
 4. **区间边界测试** — 逐条断言 §2.3 的五条边界规则；断言**不存在**任何输入使 `EF_MAY_SHARE_BLOCKS==0 && snapshots==0` 导致区间收敛。
 5. **信号不可加测试** — 断言信号字节永不参与求和；断言任何负信号组合都不令区间收敛；断言 `unexplained_private_gap` 始终存在于输出类型中。
 6. **JSON 确定性测试** — 同一 fixture 多次运行的 `payload` **逐字节相同**；`environment` 使用固定注入值（**不允许事后正则清洗**）；adapter 到达顺序变化不影响 payload。
@@ -667,6 +683,32 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 
 **通道覆盖矩阵是 P2 起的常设交付物。** P2 与 P3 完成前都必须基于阶段后代码重新推导矩阵，并为本阶段新开的通道增加行，不能只沿用上一阶段结论。P2 至少逐项列出 `fsx/sys.rs` 内每个 `extern` 声明，以及读操作诱发的系统代写；P3 至少逐项列出每个外部命令、子进程与未沙箱化 daemon 的状态变化通道。
 
+### 12.1 P2 通道覆盖矩阵
+
+`静态`包含 crate-root forbid、豁免边界、Clippy 清单锁；`符号锁`包含 extern 精确集合、无直接 `libc`、无 build script、禁止 inline asm/dynamic lookup；`运行时`包含 TreeSnapshot、高价值路径兜底与 deny-write sandbox；`专用`是本行的行为/差分 fixture。`—` 表示该层不覆盖，不能据此扩张安全声明。
+
+| 通道 | 静态 | 符号锁 | 运行时 | registry | 专用证据 / 剩余空格 |
+|---|---|---|---|---|---|
+| safe `std` 文件写与元数据写 | 是 | — | 是 | — | Clippy 负向变异 + read-only harness + sandbox token |
+| `getattrlist` | unsafe 仅限 `fsx/sys.rs` | 是 | 是 | — | Rust/C object 与 volume 差分、APFS fixtures；返回 mask/volume valid 逐项检查 |
+| `statfs` | 同上 | 是 | 是 | — | capacity fixture；仅作显式 basis 与 `SPACEUSED` 失败回退 |
+| `setiopolicy_np` | 同上 | 是 | 不适用（刻意修改进程策略） | — | atime/materialize/mount-trigger 三项均 set 后 get 验证；失败阻断 root |
+| `getiopolicy_np` | 同上 | 是 | 是 | — | policy round-trip fixture |
+| `CFURLCreateFromFileSystemRepresentation` | 同上 | 是 | 是 | — | capacity fixture；仅创建内存 URL |
+| `CFURLCopyResourcePropertyForKey` | 同上 | 是 | 是（只覆盖调用进程写） | — | important/opportunistic fixture；未沙箱化 daemon 的状态变化 **未覆盖** |
+| `CFNumberGetValue` | 同上 | 是 | 是 | — | capacity fixture、类型/负值检查 |
+| `CFRelease` | 同上 | 是 | 是 | — | 所有所有权分支显式释放 |
+| 两个 CoreFoundation capacity key | 同上 | 是 | 不适用 | — | extern static 同样进入精确集合 |
+| File Provider materialization | — | — | 只覆盖调用进程写 | — | `MATERIALIZE_DATALESS_FILES_OFF` set+get；失败不探测，`SF_DATALESS` 标注并跳过；daemon 侧后果 **未被 sandbox 观测** |
+| atime / 读诱发 metadata 写 | — | — | 是 | — | `VFS_ATIME_UPDATES_OFF` set+get |
+| autofs / mount trigger | — | — | sandbox 不证明 mount 状态 | — | `VFS_TRIGGER_RESOLVE_OFF` set+get；`EDEADLK`/失败令 root unknown |
+| nested mount 与 System/Data firmlink | — | — | — | — | 每对象比较真实 `(fsid,fileid)`，真实 fsid 改变即拒绝；synthetic boundary test |
+| 外部命令 / 子进程 | `Command` 仅 policy | — | 是 | 是 | P2 生产 registry 仍为空；本阶段产品不调用外部命令 |
+| build script | crate root 不覆盖 | 明确断言不存在 | sandbox 构建后不覆盖 | — | 新增前必须重新开门禁 |
+| dependency crate 内部写 | 不覆盖依赖源码 | 无直接 libc 只缩小本 crate FFI | 是（仅运行到的路径） | — | 未执行依赖路径与任意 daemon 写 **未覆盖** |
+| 继承的可写 fd（stdout/stderr 之外） | — | — | Seatbelt 不追溯 sandbox 前 fd | — | **未覆盖**；当前程序不接收或构造此类 fd |
+| IPC 请求未沙箱化 daemon 改状态 | — | extern 锁仅覆盖本 crate 直接入口 | 不覆盖 daemon | — | **未覆盖**；保持 §8.1 的既有证据边界，不声称已解决 |
+
 | 阶段 | 内容 | Definition of Done |
 |---|---|---|
 | **P0** ✅ | 需求固化 | `decisions.md` 已产出，Q0–Q26 全部消解，frontier 为空 |
@@ -757,4 +799,4 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 
 见 `decisions.md` 附录 A（实测环境基线）与附录 B（必须进 fixture 的 APFS 反例清单）。
 
-`probe_attrs.c` 是 fixture 的起点。正式版本**必须**使用 `FSOPT_PACK_INVAL_ATTRS`（或动态解析 buffer）并逐项检查 returned mask —— 固定结构在属性缺失时会字段错位。
+`probe_attrs.c` 是 fixture 的常设 C oracle。正式版本**必须**使用 `FSOPT_PACK_INVAL_ATTRS` 并逐项检查 returned mask 与 volume valid mask；同时必须按对象种类使用不同的已验证布局（目录不会因 PACK 而获得 file-attribute group 的占位）。PACK 防止已请求但无效的受支持属性挪动后续字段，**不构成「一个固定结构可读取任意对象」的承诺**。Rust 与 C 对 object/volume 两种布局均做差分验证。

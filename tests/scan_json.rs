@@ -9,23 +9,49 @@ use sizetrail::model::{
 
 #[test]
 fn adapter_free_scan_emits_a_complete_json_document() {
+    let fixture = tempfile::tempdir().expect("scan root must be created");
+    let root = std::fs::canonicalize(fixture.path()).expect("root must have a physical path");
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--root", "/fixture/home"])
+        .args(["scan", "--json", "--root"])
+        .arg(root)
         .output()
         .expect("scan must run");
 
-    assert!(output.status.success());
+    assert!(matches!(output.status.code(), Some(0 | 3)));
     let document: Value = serde_json::from_slice(&output.stdout).expect("stdout must be JSON");
 
     assert_eq!(document["schema_version"], "0.1.0-unstable");
     assert!(document["environment"].is_object());
     assert!(document["payload"].is_object());
-    assert_eq!(document["payload"]["regions"], serde_json::json!([]));
+    assert_eq!(document["payload"]["regions"][0]["id"], "capacity");
+    assert!(document["payload"]["capacity"].is_array());
     assert_eq!(document["payload"]["findings"], serde_json::json!([]));
     assert_eq!(
         document["payload"]["coverage_gaps"][0]["reason"],
         "no_adapters_compiled"
     );
+}
+
+#[test]
+fn every_measured_capacity_number_carries_its_basis() {
+    let fixture = tempfile::tempdir().expect("scan root must be created");
+    let root = std::fs::canonicalize(fixture.path()).expect("root must have a physical path");
+    let output = cargo_bin_cmd!("sizetrail")
+        .args(["scan", "--json", "--root"])
+        .arg(root)
+        .output()
+        .expect("scan must run");
+    let document: Value = serde_json::from_slice(&output.stdout).expect("stdout must be JSON");
+
+    for value in document["payload"]["capacity"]
+        .as_array()
+        .expect("capacity must be an array")
+    {
+        if value["status"] == "measured" {
+            assert!(value["basis"].is_string());
+            assert!(value["bytes"].is_u64());
+        }
+    }
 }
 
 #[test]

@@ -51,7 +51,7 @@ jobs:
         run: bash scripts/check-claim-patterns.sh
 
       - name: Tests
-        run: cargo test --locked --all
+        run: cargo test --locked --all -- --nocapture
 
       - name: Fixture-generated quantitative documentation
         run: |

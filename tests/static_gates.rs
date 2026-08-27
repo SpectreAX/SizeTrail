@@ -148,11 +148,59 @@ fn fsx_extern_symbols_are_an_exact_reviewed_set() {
             && let Some((name, _)) = declaration.split_once('(')
         {
             declared.insert(name);
+        } else if inside_extern
+            && let Some(declaration) = line.strip_prefix("static ")
+            && let Some((name, _)) = declaration.split_once(':')
+        {
+            declared.insert(name);
         }
     }
-    let expected = BTreeSet::from(["getattrlist", "getiopolicy_np", "setiopolicy_np", "statfs"]);
+    let expected = BTreeSet::from([
+        "CFNumberGetValue",
+        "CFRelease",
+        "CFURLCopyResourcePropertyForKey",
+        "CFURLCreateFromFileSystemRepresentation",
+        "getattrlist",
+        "getiopolicy_np",
+        "kCFURLVolumeAvailableCapacityForImportantUsageKey",
+        "kCFURLVolumeAvailableCapacityForOpportunisticUsageKey",
+        "setiopolicy_np",
+        "statfs",
+    ]);
 
     assert_eq!(declared, expected);
+}
+
+#[test]
+fn no_build_script_or_direct_libc_dependency_opens_an_unchecked_write_surface() {
+    assert!(
+        !repository_root().join("build.rs").exists(),
+        "a build script is a separate crate and needs the full zero-write policy"
+    );
+    let manifest = fs::read_to_string(repository_root().join("Cargo.toml"))
+        .expect("Cargo manifest must be readable");
+    let dependencies = manifest
+        .split_once("[dependencies]")
+        .and_then(|(_, tail)| tail.split_once('[').map(|(section, _)| section))
+        .expect("manifest must contain a dependencies section");
+    assert!(
+        !dependencies
+            .lines()
+            .any(|line| line.trim_start().starts_with("libc")),
+        "declaring libc would make the complete write syscall surface linkable"
+    );
+}
+
+#[test]
+fn fsx_cannot_bypass_the_locked_symbol_set() {
+    let source = fs::read_to_string(repository_root().join("src/fsx/sys.rs"))
+        .expect("fsx syscall boundary must be readable");
+    for bypass in ["asm!", "global_asm!", "dlsym", "dlopen", "syscall("] {
+        assert!(
+            !source.contains(bypass),
+            "fsx uses {bypass}, bypassing the reviewed extern symbol set"
+        );
+    }
 }
 
 #[test]

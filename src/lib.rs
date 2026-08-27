@@ -6,6 +6,7 @@
 )]
 #![deny(clippy::disallowed_types)]
 
+pub mod capacity;
 pub mod fsx;
 pub mod model;
 pub mod policy;

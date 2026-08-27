@@ -1,11 +1,15 @@
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
-use std::fs;
+use std::fs::{self, File};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::Command;
 
 use sizetrail::fsx::{CapacityBasis, CapacityValue, Root};
+
+fn physical_root(fixture: &tempfile::TempDir) -> std::path::PathBuf {
+    fs::canonicalize(fixture.path()).expect("fixture root must have a physical path")
+}
 
 fn c_oracle(path: &Path) -> [Option<u64>; 5] {
     let build = tempfile::tempdir().expect("oracle build directory must be created");
@@ -46,14 +50,48 @@ fn c_oracle(path: &Path) -> [Option<u64>; 5] {
     ]
 }
 
+fn c_volume_oracle(path: &Path) -> [u64; 4] {
+    let build = tempfile::tempdir().expect("oracle build directory must be created");
+    let executable = build.path().join("probe_attrs");
+    let compiled = Command::new("xcrun")
+        .args(["clang", "-Wall", "-Wextra", "-Werror"])
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("probe_attrs.c"))
+        .arg("-o")
+        .arg(&executable)
+        .status()
+        .expect("C oracle compiler must run");
+    assert!(compiled.success(), "C oracle must compile");
+    let output = Command::new(executable)
+        .arg("--volume")
+        .arg(path)
+        .output()
+        .expect("C volume oracle must run");
+    assert!(output.status.success(), "C volume oracle must succeed");
+    let line = String::from_utf8(output.stdout).expect("C oracle output must be UTF-8");
+    let field = |name: &str| {
+        line.split_whitespace()
+            .find_map(|part| part.strip_prefix(name))
+            .expect("oracle field must exist")
+            .parse()
+            .expect("oracle field must be an integer")
+    };
+    [
+        field("size="),
+        field("free="),
+        field("available="),
+        field("used="),
+    ]
+}
+
 #[test]
 fn read_only_wrappers_measure_a_fixture_without_changing_it() {
     let fixture = tempfile::tempdir().expect("fixture root must be created");
-    let path = fixture.path().join("artifact.bin");
+    let root_path = physical_root(&fixture);
+    let path = root_path.join("artifact.bin");
     fs::write(&path, vec![0x5a; 4096]).expect("fixture file must be written");
     let before = fs::symlink_metadata(&path).expect("baseline metadata must be readable");
 
-    let root = Root::open(fixture.path()).expect("fixture root must initialize");
+    let root = Root::open(&root_path).expect("fixture root must initialize");
     let measured = root
         .measure_object(&path)
         .expect("fixture object must be measurable");
@@ -78,6 +116,8 @@ fn read_only_wrappers_measure_a_fixture_without_changing_it() {
                     | CapacityBasis::StatfsBlocksMinusFree
                     | CapacityBasis::StatfsFreeBlocks
                     | CapacityBasis::StatfsAvailableBlocks
+                    | CapacityBasis::CoreFoundationImportantUsage
+                    | CapacityBasis::CoreFoundationOpportunisticUsage
             )
     ) || matches!(value, CapacityValue::Unmeasurable { .. })));
 
@@ -88,12 +128,46 @@ fn read_only_wrappers_measure_a_fixture_without_changing_it() {
 }
 
 #[test]
+fn an_intermediate_symlink_cannot_escape_the_root() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    let outside = tempfile::tempdir().expect("outside root must be created");
+    let root_path = physical_root(&fixture);
+    let outside_path = physical_root(&outside);
+    let secret = outside_path.join("secret.bin");
+    fs::write(&secret, b"outside").expect("outside fixture must be written");
+    let link = root_path.join("escape");
+    std::os::unix::fs::symlink(&outside_path, &link).expect("escape symlink must be created");
+
+    let root = Root::open(&root_path).expect("fixture root must initialize");
+    let error = root
+        .measure_object(&link.join("secret.bin"))
+        .expect_err("an intermediate symlink must not be followed");
+    assert!(matches!(error.raw_os_error(), Some(40 | 62)));
+}
+
+#[test]
+fn parent_components_cannot_escape_the_root_lexically() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    let root_path = physical_root(&fixture);
+    let root = Root::open(&root_path).expect("fixture root must initialize");
+    let error = root
+        .measure_object(&root_path.join("../outside.bin"))
+        .expect_err("parent component must be rejected before probing");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[test]
 fn rust_getattrlist_matches_the_c_oracle() {
     let fixture = tempfile::tempdir().expect("fixture root must be created");
-    let path = fixture.path().join("oracle.bin");
+    let root_path = physical_root(&fixture);
+    let path = root_path.join("oracle.bin");
     fs::write(&path, vec![0xa5; 8192]).expect("oracle fixture must be written");
+    File::open(&path)
+        .expect("oracle fixture must reopen")
+        .sync_all()
+        .expect("oracle fixture must be stable");
 
-    let rust = Root::open(fixture.path())
+    let rust = Root::open(&root_path)
         .expect("fixture root must initialize")
         .measure_object(&path)
         .expect("Rust measurement must succeed");
@@ -104,4 +178,41 @@ fn rust_getattrlist_matches_the_c_oracle() {
     assert_eq!(rust.resource_fork_allocated_bytes, c[2]);
     assert_eq!(rust.private_bytes, c[3]);
     assert_eq!(rust.extended_flags, c[4]);
+}
+
+#[test]
+fn rust_volume_layout_matches_the_c_oracle() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    let root_path = physical_root(&fixture);
+    let c = c_volume_oracle(&root_path);
+    let rust = Root::open(&root_path)
+        .expect("fixture root must initialize")
+        .capacity()
+        .expect("Rust capacity must succeed");
+    let measured = |kind| {
+        rust.iter().find_map(|value| match value {
+            CapacityValue::Measured {
+                kind: measured,
+                bytes,
+                ..
+            } if *measured == kind => Some(*bytes),
+            _ => None,
+        })
+    };
+
+    assert_eq!(
+        measured(sizetrail::fsx::CapacityKind::VolumeSize),
+        Some(c[0])
+    );
+    for (kind, oracle) in [
+        (sizetrail::fsx::CapacityKind::VolumeFree, c[1]),
+        (sizetrail::fsx::CapacityKind::AvailableNormal, c[2]),
+        (sizetrail::fsx::CapacityKind::VolumeUsed, c[3]),
+    ] {
+        let rust = measured(kind).expect("capacity must be measured");
+        assert!(
+            rust.abs_diff(oracle) < 1024 * 1024 * 1024,
+            "volatile volume value differs from the C oracle by at least 1 GiB"
+        );
+    }
 }

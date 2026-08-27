@@ -3,7 +3,10 @@
 use std::fs;
 use std::path::Path;
 
+use sizetrail::capacity::CapacityReport;
+use sizetrail::fsx::{CapacityBasis, CapacityKind, CapacityValue};
 use sizetrail::model::EnvironmentEnvelope;
+use sizetrail::model::RegionStatus;
 use sizetrail::scan::scan;
 
 #[test]
@@ -15,7 +18,17 @@ fn generate_empty_scan_document() {
         home: "/Users/fixture".to_owned(),
         tool_versions: Default::default(),
     };
-    let document = scan(environment);
+    let document = scan(
+        environment,
+        CapacityReport {
+            status: RegionStatus::Complete,
+            values: vec![CapacityValue::Measured {
+                kind: CapacityKind::VolumeUsed,
+                bytes: 4096,
+                basis: CapacityBasis::AttrVolSpaceUsed,
+            }],
+        },
+    );
     let rendered = serde_json::to_string_pretty(&document).expect("document must serialize");
     let output = Path::new("docs/generated/empty-scan.json");
 

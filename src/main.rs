@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Arg, ArgAction, Command, value_parser};
+use sizetrail::capacity;
 use sizetrail::model::EnvironmentEnvelope;
 use sizetrail::scan::scan;
 
@@ -51,7 +52,12 @@ fn run() -> Result<u8, String> {
                 matches.get_one::<PathBuf>("root").map(PathBuf::as_path),
             )
             .map_err(|error| error.to_string())?;
-            let document = scan(environment);
+            let root = matches
+                .get_one::<PathBuf>("root")
+                .cloned()
+                .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+                .ok_or_else(|| "HOME is unavailable and --root was not supplied".to_owned())?;
+            let document = scan(environment, capacity::measure(&root));
 
             if arguments.get_flag("json") {
                 let rendered =
@@ -61,7 +67,18 @@ fn run() -> Result<u8, String> {
                 println!("No toolchain adapters are compiled; attribution is unmeasurable.");
             }
 
-            Ok(0)
+            Ok(
+                if document
+                    .payload
+                    .regions
+                    .iter()
+                    .any(|region| region.status == sizetrail::model::RegionStatus::Unmeasurable)
+                {
+                    3
+                } else {
+                    0
+                },
+            )
         }
         _ => unreachable!("clap only returns declared subcommands"),
     }

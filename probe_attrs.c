@@ -1,5 +1,5 @@
-// Throwaway probe: dump the APFS size/sharing attributes SizeTrail's plane-3
-// interval math depends on. Not part of the product.
+// Independent C oracle for the APFS object and volume layouts used by tests.
+// It is not linked into the product.
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -18,7 +18,44 @@ struct buf {
     uint64_t extflags;
 } __attribute__((aligned(4), packed));
 
+struct volume_buf {
+    uint32_t length;
+    attribute_set_t returned;
+    off_t size;
+    off_t free;
+    off_t available;
+    off_t used;
+    vol_capabilities_attr_t capabilities;
+    vol_attributes_attr_t attributes;
+} __attribute__((aligned(4), packed));
+
+static int print_volume(const char *path) {
+    struct attrlist al;
+    struct volume_buf b;
+    memset(&al, 0, sizeof(al));
+    memset(&b, 0, sizeof(b));
+    al.bitmapcount = ATTR_BIT_MAP_COUNT;
+    al.commonattr = ATTR_CMN_RETURNED_ATTRS;
+    al.volattr = ATTR_VOL_SIZE | ATTR_VOL_SPACEFREE | ATTR_VOL_SPACEAVAIL |
+                 ATTR_VOL_SPACEUSED | ATTR_VOL_CAPABILITIES |
+                 ATTR_VOL_ATTRIBUTES | ATTR_VOL_INFO;
+    if (getattrlist(path, &al, &b, sizeof(b),
+                    FSOPT_ATTR_CMN_EXTENDED | FSOPT_NOFOLLOW |
+                        FSOPT_PACK_INVAL_ATTRS | FSOPT_RETURN_REALDEV) != 0) {
+        fprintf(stderr, "volume getattrlist: %s\n", strerror(errno));
+        return 1;
+    }
+    printf("size=%lld free=%lld available=%lld used=%lld returned=0x%x valid=0x%x\n",
+           (long long)b.size, (long long)b.free, (long long)b.available,
+           (long long)b.used, b.returned.volattr,
+           b.attributes.validattr.volattr);
+    return 0;
+}
+
 int main(int argc, char **argv) {
+    if (argc == 3 && strcmp(argv[1], "--volume") == 0) {
+        return print_volume(argv[2]);
+    }
     for (int i = 1; i < argc; i++) {
         struct attrlist al;
         struct buf b;

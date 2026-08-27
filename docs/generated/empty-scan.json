@@ -7,7 +7,20 @@
     "tool_versions": {}
   },
   "payload": {
-    "regions": [],
+    "capacity": [
+      {
+        "status": "measured",
+        "kind": "volume_used",
+        "bytes": 4096,
+        "basis": "attr_vol_space_used"
+      }
+    ],
+    "regions": [
+      {
+        "id": "capacity",
+        "status": "complete"
+      }
+    ],
     "findings": [],
     "coverage_gaps": [
       {

@@ -169,7 +169,7 @@ pub struct ReadOnlyFixture {
 impl ReadOnlyFixture {
     pub fn create() -> io::Result<Self> {
         let temporary_directory = tempfile::tempdir()?;
-        let snapshot_root = temporary_directory.path().to_path_buf();
+        let snapshot_root = fs::canonicalize(temporary_directory.path())?;
         let home = snapshot_root.join("home");
         let cache = home.join("Library/Caches/example");
 

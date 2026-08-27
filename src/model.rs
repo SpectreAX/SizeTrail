@@ -4,6 +4,8 @@ use std::time::{SystemTime, SystemTimeError, UNIX_EPOCH};
 
 use serde::Serialize;
 
+use crate::fsx::CapacityValue;
+
 pub const SCHEMA_VERSION: &str = "0.1.0-unstable";
 
 #[derive(Debug, Serialize)]
@@ -41,6 +43,7 @@ impl EnvironmentEnvelope {
 
 #[derive(Debug, Serialize)]
 pub struct ScanPayload {
+    pub capacity: Vec<CapacityValue>,
     pub regions: Vec<RegionReport>,
     pub findings: Vec<Finding>,
     pub coverage_gaps: Vec<CoverageGap>,
@@ -52,7 +55,7 @@ pub struct RegionReport {
     pub status: RegionStatus,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegionStatus {
     Complete,
@@ -152,6 +155,7 @@ pub struct CoverageGap {
 #[serde(rename_all = "snake_case")]
 pub enum CoverageGapReason {
     NoAdaptersCompiled,
+    RootUnmeasurable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

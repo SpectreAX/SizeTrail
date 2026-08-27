@@ -25,6 +25,7 @@ const FSOPT_NOFOLLOW: u64 = 0x0000_0001;
 const FSOPT_PACK_INVAL_ATTRS: u64 = 0x0000_0008;
 const FSOPT_ATTR_CMN_EXTENDED: u64 = 0x0000_0020;
 const FSOPT_RETURN_REALDEV: u64 = 0x0000_0200;
+const FSOPT_NOFOLLOW_ANY: u64 = 0x0000_0800;
 
 const IOPOL_SCOPE_PROCESS: c_int = 0;
 const IOPOL_TYPE_VFS_ATIME_UPDATES: c_int = 2;
@@ -86,6 +87,26 @@ unsafe extern "C" {
     fn statfs(path: *const c_char, stats: *mut StatFs) -> c_int;
 }
 
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    static kCFURLVolumeAvailableCapacityForImportantUsageKey: *const c_void;
+    static kCFURLVolumeAvailableCapacityForOpportunisticUsageKey: *const c_void;
+    fn CFURLCreateFromFileSystemRepresentation(
+        allocator: *const c_void,
+        buffer: *const u8,
+        buffer_length: isize,
+        is_directory: u8,
+    ) -> *const c_void;
+    fn CFURLCopyResourcePropertyForKey(
+        url: *const c_void,
+        key: *const c_void,
+        value: *mut *const c_void,
+        error: *mut *const c_void,
+    ) -> u8;
+    fn CFNumberGetValue(number: *const c_void, number_type: isize, value: *mut c_void) -> u8;
+    fn CFRelease(object: *const c_void);
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct VolumeRaw {
     pub returned: AttributeSet,
@@ -93,6 +114,8 @@ pub(super) struct VolumeRaw {
     pub free: u64,
     pub available: u64,
     pub used: u64,
+    pub capabilities: [u32; 4],
+    pub valid_capabilities: [u32; 4],
     pub valid_attributes: AttributeSet,
 }
 
@@ -170,9 +193,9 @@ pub(super) fn volume(path: &CStr) -> io::Result<VolumeRaw> {
     let size = cursor.u64()?;
     let free = cursor.u64()?;
     let available = cursor.u64()?;
-    let _capabilities = cursor.u32_array()?;
-    let _valid_capabilities = cursor.u32_array()?;
     let used = cursor.u64()?;
+    let capabilities = cursor.u32_array()?;
+    let valid_capabilities = cursor.u32_array()?;
     let valid_attributes = cursor.attribute_set()?;
     let _native_attributes = cursor.attribute_set()?;
     Ok(VolumeRaw {
@@ -181,6 +204,8 @@ pub(super) fn volume(path: &CStr) -> io::Result<VolumeRaw> {
         free,
         available,
         used,
+        capabilities,
+        valid_capabilities,
         valid_attributes,
     })
 }
@@ -250,6 +275,73 @@ pub(super) fn filesystem(path: &CStr) -> io::Result<StatFsRaw> {
     })
 }
 
+pub(super) fn important_capacity(path: &CStr) -> io::Result<u64> {
+    // SAFETY: the imported key is an immutable CoreFoundation constant.
+    let key = unsafe { kCFURLVolumeAvailableCapacityForImportantUsageKey };
+    resource_capacity(path, key)
+}
+
+pub(super) fn opportunistic_capacity(path: &CStr) -> io::Result<u64> {
+    // SAFETY: the imported key is an immutable CoreFoundation constant.
+    let key = unsafe { kCFURLVolumeAvailableCapacityForOpportunisticUsageKey };
+    resource_capacity(path, key)
+}
+
+fn resource_capacity(path: &CStr, key: *const c_void) -> io::Result<u64> {
+    let path_bytes = path.to_bytes();
+    let length = isize::try_from(path_bytes.len())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path is too long"))?;
+    // SAFETY: bytes and length describe the live CStr storage. A null allocator
+    // selects the CoreFoundation default allocator.
+    let url = unsafe {
+        CFURLCreateFromFileSystemRepresentation(std::ptr::null(), path_bytes.as_ptr(), length, 1)
+    };
+    if url.is_null() {
+        return Err(io::Error::other(
+            "CoreFoundation could not create a file URL",
+        ));
+    }
+
+    let mut value = std::ptr::null();
+    let mut error = std::ptr::null();
+    // SAFETY: url and key are immutable CF objects; output pointers address
+    // initialized local slots and the return value is checked.
+    let copied = unsafe { CFURLCopyResourcePropertyForKey(url, key, &mut value, &mut error) };
+    if copied == 0 || value.is_null() {
+        // SAFETY: non-null results are owned references returned by CF.
+        unsafe {
+            if !error.is_null() {
+                CFRelease(error);
+            }
+            CFRelease(url);
+        }
+        return Err(io::Error::other(
+            "CoreFoundation capacity property was unavailable",
+        ));
+    }
+    if !error.is_null() {
+        // SAFETY: an unexpected non-null error is still an owned CF result.
+        unsafe { CFRelease(error) };
+    }
+
+    let mut signed_bytes = 0_i64;
+    // SAFETY: value is the documented CFNumber for these keys and the output
+    // points to an i64 matching kCFNumberSInt64Type (4).
+    let converted = unsafe { CFNumberGetValue(value, 4, (&raw mut signed_bytes).cast()) };
+    // SAFETY: value and url are owned references and are released once.
+    unsafe {
+        CFRelease(value);
+        CFRelease(url);
+    }
+    if converted == 0 {
+        return Err(io::Error::other(
+            "CoreFoundation capacity did not fit a signed 64-bit integer",
+        ));
+    }
+    u64::try_from(signed_bytes)
+        .map_err(|_| io::Error::other("CoreFoundation returned a negative capacity"))
+}
+
 fn call_getattrlist(path: &CStr, attributes: &AttrList) -> io::Result<Vec<u8>> {
     let mut buffer = vec![0_u8; 256];
     // SAFETY: path is NUL-terminated, AttrList follows the SDK ABI, and the
@@ -263,7 +355,8 @@ fn call_getattrlist(path: &CStr, attributes: &AttrList) -> io::Result<Vec<u8>> {
             FSOPT_NOFOLLOW
                 | FSOPT_PACK_INVAL_ATTRS
                 | FSOPT_ATTR_CMN_EXTENDED
-                | FSOPT_RETURN_REALDEV,
+                | FSOPT_RETURN_REALDEV
+                | FSOPT_NOFOLLOW_ANY,
         )
     };
     if status == -1 {
@@ -362,12 +455,17 @@ pub(super) mod bits {
 
 #[cfg(test)]
 mod tests {
-    use super::{AttrList, AttributeSet, StatFs};
+    use super::{AttrList, AttributeSet, StatFs, install_read_policies};
 
     #[test]
     fn copied_darwin_abi_layouts_match_the_sdk() {
         assert_eq!(size_of::<AttrList>(), 24);
         assert_eq!(size_of::<AttributeSet>(), 20);
         assert_eq!(size_of::<StatFs>(), 2168);
+    }
+
+    #[test]
+    fn read_induced_write_guards_set_and_verify_on_this_process() {
+        install_read_policies().expect("read I/O policies must round-trip");
     }
 }
