@@ -746,6 +746,99 @@ P3 的契约只把 `PolicyCtx` 传给 `inventory`，却没有传入 `probe` 的�
 
 ---
 
+## Q37 — `doctor` 只报告目标读取能力，不推断全局 FDA 状态
+
+**决策：SizeTrail 不输出“Full Disk Access 已授权/未授权”这一全局结论。** `doctor`
+只对产品实际会扫描的具体 target 执行与扫描同构的只读探测，并报告
+`target + stage + errno + typed capability status`。它不得读取 Mail、Safari、TCC
+数据库或其他与 SizeTrail 扫描范围无关的路径来猜测授权。
+
+macOS 没有供普通进程可靠查询调用端全局 FDA 状态的公开 API；一次具体访问失败也
+不能唯一识别 FDA。`ENOENT` 表示目标不存在或已变化，不能写成权限拒绝；`EACCES`
+与 POSIX/ACL 拒绝一致；`EPERM` 只说明策略拒绝，可能来自 TCC/FDA、App Sandbox、
+SIP、Data Vault 或其他策略，必须保留为未知来源的 policy denial。`stat` / `access`
+成功也不能证明后续目录枚举或属性读取成功，因此诊断必须记录实际失败阶段。
+
+`TERM_PROGRAM`、父进程与 bundle id 只能作为可伪造或继承的 launcher hint，不是授权
+主体证据。输出必须明确标为 hint；不得据此声称某个终端已获授权。SizeTrail 可以
+打印打开系统设置的精确命令供用户自行执行，但永不执行该命令（Q11、Q14）。
+
+发布前人工验证改为在新用户中对 SizeTrail 的真实扫描 target 分别验证“可读”与
+“策略拒绝”路径，并核对 typed status、路径、阶段与 errno；不再要求一个无法可靠
+观测的全局 FDA 真值。
+
+被否：根据 `EPERM` 推断 FDA denied；根据 `TERM_PROGRAM` 宣布当前终端授权状态；
+探测无关隐私目录或直接读取 TCC 数据库；继续保留“doctor 准确报告全局 FDA”的规格
+而不给出可机械验证证据。
+
+影响：`SPEC.md` §3.1、§10.4、§11.1、§11.3、§14.1；`doctor` 输出 schema 与测试。
+
+---
+
+## Q38 — `explain --from` 的“纯解析”边界
+
+**决策：`explain <id> --from <file|->` 只读取用户显式提供的报告输入；不重探报告中
+的路径，不运行 adapter，不调用外部工具。** `--from -` 仅读 stdin；`--from file`
+必然需要读取该文件，因此 Q24 中“不访问文件系统”的字面表述不可实现，收窄为
+“除显式报告文件外不访问文件系统”。报告文件仍受 dataless/materialization gate
+约束，未知 schema 或 ID 算法版本 fail closed。
+
+被否：声称 file 模式零文件系统访问；为了维持字面声明而只支持 stdin；解析后暗中
+重扫 current path。
+
+影响：Q24 的表达边界；`SPEC.md` §11.4；`explain --from` 测试。
+
+---
+
+## Q39 — CoreSimulator inventory 的版本门控与副作用边界
+
+**决策：P4 只通过 registry 中两条固定命令读取 CoreSimulator inventory：**
+`/usr/bin/xcrun simctl list --json devices` 与
+`/usr/bin/xcrun simctl list --json runtimes`，每次 scan 各最多一次、硬超时 30 秒。
+只有退出码 0 且完整解析预期 JSON 才算成功；非零退出即使 stdout 像 JSON 也失败。
+未知字段容忍，身份所需字段缺失或不合法则形成 typed coverage gap。
+
+这两条命令可能启动/连接 per-user `CoreSimulatorService` 与 `simdiskimaged`。registry
+限制 SizeTrail 的调用次数，但 Seatbelt 不覆盖 daemon 自身状态变化，因此该通道继续
+在覆盖矩阵中标为未沙箱化的已知读副作用。超时时只终止并回收直接 child，不 `pkill`
+daemon、不自动重试。stderr 的存在保留为稳定 typed warning，原文只写 stderr，不能
+进入确定性 payload。
+
+`simctl` 是设备 identity authority：`udid` 必须是合法 UUID，`dataPath` 必须与该 UUID
+的 Device root 后缀一致；不得信任其任意绝对路径。用户在遍历前排除完整 Devices root
+时，devices probe 调用次数必须为 0。runtime 大小若无已验证 vendor 口径则明确
+unmeasurable；不得把 runtime mount path 当成可直接删除对象。
+
+advice 仅展示 Apple 命令：设备可展示精确 `xcrun simctl delete <validated-UDID>` 并
+声明无可靠 preview；runtime 只展示 inspect 与 Xcode Settings/Components 路径，不
+建议 raw delete。
+
+被否：接受非零退出的残缺 JSON；无 timeout 等待 daemon；从 `dataPath` 任意读取；
+排除 Devices 后仍启动 devices probe；把 `simctl list runtimes` 虚构成 runtime 字节
+口径或直接清理接口。
+
+影响：`SPEC.md` §3.4、§5.2、§8.2、§10.2、§12 通道矩阵；Xcode adapter 与 registry。
+
+---
+
+## Q40 — P4 未证明并发稳定时 disposition floor 固定为 0
+
+**决策：v0.1 不建立 link/clone/snapshot 的扫描前后稳定性证明，因此所有 store 的
+disposition interval 下界 fail closed 为 0。** `ATTR_CMNEXT_PRIVATESIZE` 仍作为已测
+信号保留，但不能在缺少 Q10 第四项前提时进入可保证下界。ceiling 仍按去重后的
+allocated footprint 求和，缺失即 unknown。
+
+JSON interval 必须携带 `applicable_action = permanent_unlink_after_references_close`，
+明确该区间描述永久 unlink 且所有 open reference 关闭后的潜在结果，不是 SizeTrail
+会执行的动作，也不是 Finder Trash 的即时释放。
+
+被否：把“本次扫描没有主动观察到变化”当稳定性证据；硬编码 `snapshots_stable=true`；
+为追求非零下界而弱化 Q10 前提。
+
+影响：`SPEC.md` §2.3、§7、§10.2；P4 Xcode store measurement 与 fixture。
+
+---
+
 ## 附录 A — 实测环境基线
 
 采集于 2026-08-26，作为规则表量级参考与回归基线：

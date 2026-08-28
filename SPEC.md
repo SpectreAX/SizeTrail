@@ -121,6 +121,12 @@ mole 已有 allocated-size、硬链接去重、purgeable 标量与若干 insight
 
 **术语纪律：** 区间宽度**不能称「共享字节」**（多个 clone 会让上界重复膨胀），只能叫 `allocation uncertainty width`。
 
+JSON 中该区间的 `basis` 必须是显式的 `private_floor_allocated_ceiling`；不得把它标成
+单一 `private_size` 或 `allocated_footprint`，因为两端来自不同计量口径。
+区间值同时携带 `applicable_action = permanent_unlink_after_references_close`。P4 未
+建立扫描前后 link/clone/snapshot 稳定性证明，故 v0.1 的 floor **一律为 0**（Q40）；
+不得把一次读取过程或负信号当作并发稳定证据。
+
 **实际容器 free delta 必须单列**，不得宣称落在区间内 —— 它受 open fd、目录 metadata 与并发写盘影响。
 
 **已被反例否决、不得重新引入的收敛规则：**
@@ -193,14 +199,20 @@ enum Scope { Object, Inode, Volume }
 
 ### 3.1 TCC / Full Disk Access
 
-授权对象是**调用 SizeTrail 的终端 App**（Terminal / iTerm2 / Ghostty…），不是二进制本身。
-
 **硬性要求：必须区分「这里是 0 字节」和「我看不见这里」。**
 
-- 对每个受 TCC 保护的 region 做探针读取，捕获 `EPERM`。
-- 被拒绝时标记为 typed `permission_denied` 状态，**不得静默报 0**。
+- 对每个实际扫描 target 执行与 scan 同构的只读探测；记录具体 `target`、失败
+  `stage` 与原始 `errno`。
+- `ENOENT` 是 absent/changed，`EACCES` 是 access denied，`EPERM` 是来源未知的
+  policy denial；**不得把任一单独错误写成全局 FDA 状态。**
+- `stat` / `access` 成功不代表目录枚举或属性读取成功。诊断必须以实际读取阶段为准。
+- 被拒绝时使用 typed capability status，**不得静默报 0**。
 - 映射到退出码 3（§11.3），属**信息性**而非错误。
-- `sizetrail doctor` 输出当前终端 App 名称、授权状态与具体授权路径指引。
+- `sizetrail doctor` 输出逐 target 的读取能力与修复指引；不读取 Mail、Safari、TCC
+  数据库或任何非扫描目标来猜测权限。
+- macOS 没有供普通进程可靠查询全局 FDA 状态的公开 API。`TERM_PROGRAM`、父进程
+  与 bundle id 只能输出为未验证的 launcher hint，不能作为授权主体证据。
+- 可打印打开系统设置的命令供用户自行执行；SizeTrail 永不执行该命令。
 
 ### 3.2 iCloud / File Provider（严格约束）
 
@@ -302,7 +314,7 @@ trait ToolchainAdapter {
     fn inventory(&self, ctx: &mut PolicyCtx, state: &AdapterState) -> Inventory;
 
     /// 归类：action/mechanism、recoverability、sensitivity（Q4）。
-    fn classify(&self, inv: &Inventory) -> Vec<Finding>;
+    fn classify(&self, inv: &Inventory) -> Result<Vec<Finding>, InventoryGapReason>;
 
     /// 生成建议。永不执行。
     fn advise(&self, f: &Finding) -> Vec<Advice>;
@@ -323,6 +335,15 @@ trait ToolchainAdapter {
 - 规则**只能引用已编译的 adapter id**，不能提供任意命令。**这是安全属性，不是架构品味** —— 允许 TOML 携带任意命令等于开命令注入面。
 
 **P3 Xcode probe（Q35）：** registry 仅含 `xcode-select -p`、`xcodebuild -version`、`xcodebuild -checkFirstLaunchStatus` 三条绝对只读命令，各最多一次，共用 `SIZETRAIL_NO_XCODE_PROBE`。固定 C locale 并移除 `DEVELOPER_DIR` / `SDKROOT` / `TOOLCHAINS` 与已知 `xcrun_*` 重定向变量。标准 CLT selection 是 `not_present`；未知版本（诊断同时保留 version + build id）与未完成 first-launch/license 是不同 degraded reason。P3 不运行 `xcrun` 或 `simctl`。当前 hosted 精确验证对为 `16.4 (16F6)` 与 `26.6 (17F113)`；矩阵漂移必须令测试失败并显式更新。
+
+**P4 CoreSimulator inventory（Q39）：** 仅增加
+`/usr/bin/xcrun simctl list --json devices` 与
+`/usr/bin/xcrun simctl list --json runtimes`，各最多一次、硬超时 30 秒。仅退出 0 且
+完整解析 JSON 成功；未知字段容忍，所需 identity 字段缺失形成 typed gap。超时只终止
+直接 child，不 `pkill` daemon、不重试。命令可能启动/连接 CoreSimulatorService 与
+simdiskimaged，此 daemon 状态变化不受 Seatbelt 覆盖，必须留在副作用表与矩阵中。
+排除完整 Devices root 时 devices probe 调用为 0。simctl stderr 原文只写 stderr，
+payload 只保留稳定 typed warning。
 
 ### 5.3 验证矩阵（Q12）
 
@@ -399,6 +420,7 @@ recoverability = "rebuild_time_cost"   # trash_restore | rebuild_time_cost | red
 sensitivity    = "low"                 # low | medium | high
 
 evidence = "下次 build 自动重建，代价是一次全量编译时间。"
+fixture_id = "xcode-derived-data"
 
 [rule.preconditions]
 process_not_running = ["Xcode"]        # owner 进程在跑则标注状态
@@ -410,6 +432,7 @@ process_not_running = ["Xcode"]        # owner 进程在跑则标注状态
 - **白名单语义。** 只有匹配规则的路径才被测量。**禁止**「X 下除 Y 以外全部」的黑名单写法。
 - 每条规则必须有**非空 `evidence`**。写不出「删了会怎样」的规则不允许合入。
 - 每条规则必须有至少一个对应 fixture 测试。
+- fixture 必须断言 rule id、正交分类与至少一个期望匹配路径，不能只是同名空文件。
 - 新增规则的 PR 必须说明量级来源（实测数据，不是猜测）。
 - **规则不得携带任何命令。** 只能引用已编译 adapter id（§5.2）。
 
@@ -623,7 +646,8 @@ cargo audit
 
 自动化测试无法覆盖真实 macOS 的权限与路径现实。每个 minor 发布前，在**新建的测试用户账户**上执行：
 
-1. `sizetrail doctor` — 权限诊断是否准确（含无 FDA 与有 FDA 两种状态）
+1. `sizetrail doctor` — 在 SizeTrail 的真实 target 上分别验证可读与策略拒绝；核对
+   target、stage、errno 与 typed status。**不把测试结果改写为全局 FDA 状态**
 2. `sizetrail scan` — 三平面数字的口径标注是否正确、coverage gap 是否诚实
 3. `sizetrail scan --json | jq` — schema 完整性
 4. 未安装 Docker 的机器上 — 断言 `not_present` 且退出码 0
@@ -641,7 +665,7 @@ sizetrail                            显示帮助，不自动探测
 sizetrail scan [--json]              只读归因报告
 sizetrail explain <finding-id>       解释单个 finding
        [--json | --path] [--from <file|->]
-sizetrail doctor [--json]            TCC、工具版本、side-effect gate 诊断
+sizetrail doctor [--json]            target 读取能力、工具版本、side-effect gate 诊断
 sizetrail rules [--json]             查看内置规则表
 sizetrail completion <shell>         生成补全脚本（仅打印 stdout）
 ```
@@ -691,14 +715,15 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 
 每个 region 使用 typed status；stderr 仅作人类诊断。
 
-**退出码 3 属信息性**，无 FDA 时为**预期**状态。就绪性检查 gate 在 `doctor`，不在 `scan` 的退出码。
+**退出码 3 属信息性**，目标路径受策略拒绝时为**预期**状态。就绪性检查 gate 在
+`doctor`，不在 `scan` 的退出码。
 
 ### 11.4 `explain` 的两种模式（Q24）
 
 | 模式 | 行为 | provenance |
 |---|---|---|
 | `explain <id>` | 只重探 **owning adapter**。finding 消失时返回 typed `not_found_after_rescan`，**不回退扫描其他 adapter** | live |
-| `explain <id> --from <file\|->` | 纯解析先前报告，**不访问文件系统或外部工具**。校验 schema 版本与 ID 算法版本 | `snapshot_only` |
+| `explain <id> --from <file\|->` | 只读取用户显式提供的报告输入；不重探报告路径、不运行 adapter 或外部工具。file 模式除该报告文件外不访问文件系统；stdin 模式只读 stdin。校验 schema 版本与 ID 算法版本 | `snapshot_only` |
 
 `--from` 模式必须标记报告时间及「当前路径可能已变化」；`--path` 输出**报告捕获时**的路径，**不声称当前身份仍匹配**。
 
@@ -718,9 +743,9 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 
 **每个阶段必须满足其 Definition of Done 才可进入下一阶段。不允许并行推进或跳阶。**
 
-**通道覆盖矩阵是 P2 起的常设交付物。** P2 与 P3 完成前都必须基于阶段后代码重新推导矩阵，并为本阶段新开的通道增加行，不能只沿用上一阶段结论。P2 至少逐项列出 `fsx/sys.rs` 内每个 `extern` 声明，以及读操作诱发的系统代写；P3 至少逐项列出每个外部命令、子进程与未沙箱化 daemon 的状态变化通道。
+**通道覆盖矩阵是 P2 起的常设交付物。** P2、P3 与 P4 完成前都必须基于阶段后代码重新推导矩阵，并为本阶段新开的通道增加行，不能只沿用上一阶段结论。P2 至少逐项列出 `fsx/sys.rs` 内每个 `extern` 声明，以及读操作诱发的系统代写；P3 至少逐项列出每个外部命令、子进程与未沙箱化 daemon 的状态变化通道；P4 继续加入每条 `simctl`、规则解析、显式报告文件读取、completion 与新增依赖的运行时通道。
 
-### 12.1 P2 通道覆盖矩阵
+### 12.1 当前 P4 通道覆盖矩阵
 
 `静态`包含 crate-root forbid、豁免边界、Clippy 清单锁；`符号锁`包含 extern 精确集合、无直接 `libc`、无 build script、禁止 inline asm/dynamic lookup；`运行时`包含 TreeSnapshot、高价值路径兜底与 deny-write sandbox；`专用`是本行的行为/差分 fixture。`—` 表示该层不覆盖，不能据此扩张安全声明。
 
@@ -741,12 +766,19 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | atime / 读诱发 metadata 写 | — | — | 是 | — | `VFS_ATIME_UPDATES_OFF` set+get |
 | autofs / mount trigger | — | — | sandbox 不证明 mount 状态 | — | `VFS_TRIGGER_RESOLVE_OFF` set+get；`EDEADLK`/失败令 root unknown |
 | nested mount 与 System/Data firmlink | — | — | — | — | 每对象比较真实 `(fsid,fileid)`，真实 fsid 改变即拒绝；synthetic boundary test |
-| 外部命令 / 子进程 | `Command` 仅 policy | — | P3 尚未接入 scan sandbox | 是 | P3 registry 精确锁定三条 Xcode probe；adapter 只能提交 `ProbeId`，不能提交程序、参数或用户输入 |
-| `/usr/bin/xcode-select -p` | `Command` 仅 policy | — | P3 尚未接入 scan sandbox | 是，max 1 | 生产 probe 测试实际执行；只判 selection，标准 CLT → `not_present` |
-| `/usr/bin/xcodebuild -version` | `Command` 仅 policy | — | P3 尚未接入 scan sandbox | 是，max 1 | 仅 selection 为完整 Xcode 候选后运行；固定 locale/清除重定向环境；未知版本降级 |
-| `/usr/bin/xcodebuild -checkFirstLaunchStatus` | `Command` 仅 policy | — | P3 尚未接入 scan sandbox | 是，max 1 | 仅已验证版本运行；非零为 `not_ready`，绝不调用写入型 `-runFirstLaunch` / `-license accept` |
+| 外部命令 / 子进程 | `Command` 仅 policy | — | 完整 scan sandbox 覆盖直接进程写尝试 | 是 | registry 精确锁定五条 Xcode probe；adapter 只能提交 `ProbeId`，不能提交程序、参数或用户输入 |
+| `/usr/bin/xcode-select -p` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 生产 probe 测试实际执行；只判 selection，标准 CLT → `not_present` |
+| `/usr/bin/xcodebuild -version` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 仅 selection 为完整 Xcode 候选后运行；固定 locale/清除重定向环境；未知版本降级 |
+| `/usr/bin/xcodebuild -checkFirstLaunchStatus` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 仅已验证版本运行；非零为 `not_ready`，绝不调用写入型 `-runFirstLaunch` / `-license accept` |
+| `/usr/bin/xcrun simctl list --json devices` | `Command` 仅 policy | — | 是（直接 child，不覆盖 daemon） | 是，max 1、30s | 仅 Ready 后运行；退出 0 + 完整 JSON；UUID/dataPath 后缀验证；完整 Devices exclude 时调用为 0 |
+| `/usr/bin/xcrun simctl list --json runtimes` | `Command` 仅 policy | — | 是（直接 child，不覆盖 daemon） | 是，max 1、30s | 仅 Ready 后运行；runtime identity 校验；大小无 vendor 口径时 typed unmeasurable，不 raw delete |
 | child stdout/stderr 与进程生命周期 | `Command` 仅 policy | — | 完整 scan sandbox 覆盖调用进程 | 是 | 固定输出由 policy 并行排空；registry 硬 timeout 会终止并回收子进程，单测断言 typed `timed_out` 与调用计数 |
-| P3 probe 诱发未沙箱化 daemon 状态变化 | — | — | 不覆盖 daemon | 是（只限制调用次数） | 本机未观察到启动 CoreSimulatorService；hosted 前后状态尚未机械验证，**未覆盖** |
+| `simctl` 诱发 CoreSimulatorService / simdiskimaged 状态变化 | — | — | 不覆盖 daemon | 是（只限制调用次数） | 已知读副作用；无自动重试、不 pkill daemon、可由 `SIZETRAIL_NO_XCODE_PROBE` 关闭；daemon 自身写 **未覆盖** |
+| 内置 TOML 规则解析 | 无外置 rules path；`include_str!` 编入 | — | scan sandbox 覆盖依赖运行路径 | — | schema `deny_unknown_fields`、无 command 字段、每条 rule + fixture 分类断言；toml crate 未执行路径仍不作全局保证 |
+| `explain --from file` 显式报告文件读取 | safe read API；无写 API | — | read-only harness / sandbox 覆盖写尝试 | — | 仅用户指定报告；先 IOPOL + dataless gate；不重探 finding path、不运行 adapter。stdin 模式无文件读取 |
+| `completion` 生成 | safe stdout | — | snapshot harness + sandbox | — | clap builder + `clap_complete` 只写 stdout；集成测试断言 cwd 无新文件 |
+| 人类 finding 输出 | safe stdout/stderr | — | sandbox 明确允许输出 fd | — | 文案不稳定；稳定面是 JSON typed signals。当前实现逐 finding 输出但仍在 inventory 完成后开始 |
+| simctl stderr | safe stderr | — | sandbox 明确允许 stderr fd | 是 | 原文只写 stderr；payload 仅 `simctl_stderr_nonempty` 稳定标签，避免主机文本污染 fixture |
 | build script | crate root 不覆盖 | 明确断言不存在 | sandbox 构建后不覆盖 | — | 新增前必须重新开门禁 |
 | dependency crate 内部写 | 不覆盖依赖源码 | 无直接 libc 只缩小本 crate FFI | 是（仅运行到的路径） | — | 未执行依赖路径与任意 daemon 写 **未覆盖** |
 | 继承的可写 fd（stdout/stderr 之外） | — | — | Seatbelt 不追溯 sandbox 前 fd | — | **未覆盖**；当前程序不接收或构造此类 fd |
@@ -819,7 +851,7 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | 风险 | 影响 | 缓解 |
 |---|---|---|
 | 用户期待清理却只得到解释 | 「找到 60GB 然后什么都做不了」的负面反馈 | Q7 已记录这是刻意选择；每个 observe-only 项必须给出该工具链官方的确切命令 —— 把「碰不了」转为「教你怎么办」 |
-| TCC 导致扫描不完整 | 归因失真、用户不信任 | §3.1 typed `permission_denied` + 退出码 3 + `doctor` 指引；**绝不静默报 0** |
+| TCC 或其他策略导致扫描不完整 | 归因失真、用户不信任 | §3.1 逐 target typed capability + 原始 errno + 退出码 3 + `doctor` 指引；**绝不静默报 0，也不把 `EPERM` 唯一归因为 FDA** |
 | iCloud materialization | **违反只读契约，产生真实下载与写入** | §3.2 强制 `IOPOL_MATERIALIZE_DATALESS_FILES_OFF` 并验证；失败即记 unknown |
 | adapter 包装的第三方 CLI 输出格式变化 | 解析失败或**静默误读** | §5.2 钉住已验证版本范围 + 未知版本显式降级。**这是本架构最大的长期维护风险** |
 | macOS 大版本挪动路径 | 规则失效 | §6 规则数据化 + `os` 门控 + 每次大版本后回归 |
