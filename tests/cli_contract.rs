@@ -12,7 +12,13 @@ fn exit_codes_distinguish_complete_fatal_usage_and_informational_scans() {
         .arg(fixture.path())
         .output()
         .expect("complete scan must run");
-    assert_eq!(complete.status.code(), Some(0));
+    assert_eq!(
+        complete.status.code(),
+        Some(0),
+        "complete scan stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&complete.stdout),
+        String::from_utf8_lossy(&complete.stderr)
+    );
     let complete_json: Value =
         serde_json::from_slice(&complete.stdout).expect("complete stdout must be JSON");
     assert_eq!(

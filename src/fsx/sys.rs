@@ -86,6 +86,7 @@ unsafe extern "C" {
         buffer_size: usize,
         flags: u32,
     ) -> c_int;
+    #[cfg_attr(target_arch = "x86_64", link_name = "fstatfs$INODE64")]
     fn fstatfs(file: c_int, stats: *mut StatFs) -> c_int;
     fn getattrlist(
         path: *const c_char,
@@ -96,6 +97,7 @@ unsafe extern "C" {
     ) -> c_int;
     fn getiopolicy_np(policy_type: c_int, scope: c_int) -> c_int;
     fn setiopolicy_np(policy_type: c_int, scope: c_int, policy: c_int) -> c_int;
+    #[cfg_attr(target_arch = "x86_64", link_name = "statfs$INODE64")]
     fn statfs(path: *const c_char, stats: *mut StatFs) -> c_int;
 }
 

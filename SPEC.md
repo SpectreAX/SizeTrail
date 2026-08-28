@@ -779,8 +779,8 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | safe `std` 文件写与元数据写 | 是 | — | 是 | — | Clippy 负向变异 + read-only harness + sandbox token |
 | dyld USDT/DOF 注册 `/dev/dtracehelper` | — | — | 精确允许 `file-write-data` | — | 平台 loader 行为；literal device + exact operation 是唯一 Seatbelt 例外，其他 `/dev` 写不允许 |
 | `getattrlist` | unsafe 仅限 `fsx/sys.rs` | 是 | 是 | — | Rust/C object 与 volume 差分、APFS fixtures；返回 mask/volume valid 逐项检查 |
-| `statfs` | 同上 | 是 | 是 | — | capacity fixture；仅作显式 basis 与 `SPACEUSED` 失败回退 |
-| `fstatfs` | 同上 | 是 | 是 | — | 打开 mount root 后回验当前 mount-session `fsid`，拒绝解析期间的 unmount/remount 竞态 |
+| `statfs` | 同上 | 是 | 是 | — | capacity fixture；x86_64 锁定 SDK 现代 `$INODE64` ABI；仅作显式 basis 与 `SPACEUSED` 失败回退 |
+| `fstatfs` | 同上 | 是 | 是 | — | x86_64 锁定 SDK 现代 `$INODE64` ABI；打开 mount root 后回验当前 mount-session `fsid`，拒绝解析期间的 unmount/remount 竞态 |
 | `fs_snapshot_list` | 同上 | 是 | 是 | — | 只请求 name + returned mask；首批返回大于 0 即为存在，Data 卷 0 条成功、非 mount-root `EINVAL`；维护者机器的 System 卷为 snapshot-positive 实证，hosted 不声称正例 |
 | `setiopolicy_np` | 同上 | 是 | 不适用（刻意修改进程策略） | — | atime/materialize/mount-trigger 三项均 set 后 get 验证；失败阻断 root |
 | `getiopolicy_np` | 同上 | 是 | 是 | — | policy round-trip fixture |

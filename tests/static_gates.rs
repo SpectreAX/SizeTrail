@@ -174,6 +174,20 @@ fn fsx_extern_symbols_are_an_exact_reviewed_set() {
 }
 
 #[test]
+fn x86_statfs_symbols_are_locked_to_the_modern_inode64_abi() {
+    let source = fs::read_to_string(repository_root().join("src/fsx/sys.rs"))
+        .expect("fsx syscall boundary must be readable");
+    for symbol in ["statfs", "fstatfs"] {
+        assert!(
+            source.contains(&format!(
+                "#[cfg_attr(target_arch = \"x86_64\", link_name = \"{symbol}$INODE64\")]"
+            )),
+            "x86_64 {symbol} must retain the SDK's modern inode64 symbol alias"
+        );
+    }
+}
+
+#[test]
 fn no_build_script_or_direct_libc_dependency_opens_an_unchecked_write_surface() {
     assert!(
         !repository_root().join("build.rs").exists(),
