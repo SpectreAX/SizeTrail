@@ -95,6 +95,9 @@ fn read_only_wrappers_measure_a_fixture_without_changing_it() {
     let capacity = root
         .capacity()
         .expect("fixture capacity must be measurable");
+    let _has_snapshots = root
+        .volume_has_snapshots()
+        .expect("the mounted APFS fixture volume must expose snapshot state");
 
     assert_eq!(measured.logical_bytes, 4096);
     assert_eq!(measured.identity.fsid, root.identity().fsid);

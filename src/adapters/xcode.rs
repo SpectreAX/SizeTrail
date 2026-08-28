@@ -31,12 +31,21 @@ pub const SIMCTL_RUNTIMES: ProbeId = XCODE_SIMCTL_RUNTIMES;
 pub struct XcodeAdapter<'a> {
     root: &'a Root,
     excludes: &'a [PathBuf],
+    volume_has_snapshots: Result<bool, Option<i32>>,
 }
 
 impl<'a> XcodeAdapter<'a> {
     #[must_use]
-    pub const fn new(root: &'a Root, excludes: &'a [PathBuf]) -> Self {
-        Self { root, excludes }
+    pub const fn new(
+        root: &'a Root,
+        excludes: &'a [PathBuf],
+        volume_has_snapshots: Result<bool, Option<i32>>,
+    ) -> Self {
+        Self {
+            root,
+            excludes,
+            volume_has_snapshots,
+        }
     }
 }
 
@@ -173,6 +182,19 @@ impl XcodeAdapter<'_> {
     fn inventory_static(&self) -> Result<Inventory, InventoryGapReason> {
         let rules = builtin_rules().map_err(|_| InventoryGapReason::RuleSetInvalid)?;
         let mut inventory = Inventory::default();
+        let volume_has_snapshots = match self.volume_has_snapshots {
+            Ok(value) => value,
+            Err(errno) => {
+                inventory.gaps.push(InventoryGap {
+                    region: "xcode",
+                    path: None,
+                    reason: InventoryGapReason::VolumeSnapshotStateUnavailable,
+                    stage: Some(InventoryStage::VolumeSnapshots),
+                    errno,
+                });
+                false
+            }
+        };
 
         for rule in rules.iter().filter(|rule| {
             matches!(
@@ -193,7 +215,7 @@ impl XcodeAdapter<'_> {
                 }
             }
             for path in paths {
-                match measure_store(self.root, &path, self.excludes) {
+                match measure_store(self.root, &path, self.excludes, volume_has_snapshots) {
                     Ok((measurements, observations)) => {
                         let Ok(normalized_path) = normalized_report_path(self.root.path(), &path)
                         else {
@@ -296,19 +318,23 @@ impl XcodeAdapter<'_> {
                 if excluded(&path, self.excludes) {
                     continue;
                 }
-                let (measurements, observations) =
-                    match measure_store(self.root, &path, self.excludes) {
-                        Ok(measured) => measured,
-                        Err(error) => {
-                            inventory.gaps.push(io_gap(
-                                "xcode.simulator_devices",
-                                &path,
-                                InventoryStage::MeasureObject,
-                                &error,
-                            ));
-                            continue;
-                        }
-                    };
+                let (measurements, observations) = match measure_store(
+                    self.root,
+                    &path,
+                    self.excludes,
+                    self.volume_has_snapshots.unwrap_or(false),
+                ) {
+                    Ok(measured) => measured,
+                    Err(error) => {
+                        inventory.gaps.push(io_gap(
+                            "xcode.simulator_devices",
+                            &path,
+                            InventoryStage::MeasureObject,
+                            &error,
+                        ));
+                        continue;
+                    }
+                };
                 let normalized_path = format!("~/Library/Developer/CoreSimulator/Devices/{udid}");
                 inventory.items.push(InventoryItem {
                     rule_id: "xcode.simulator_device".to_owned(),
@@ -492,6 +518,7 @@ fn measure_store(
     root: &Root,
     path: &Path,
     excludes: &[PathBuf],
+    volume_has_snapshots: bool,
 ) -> io::Result<(Vec<Measurement>, Vec<SignalObservation>)> {
     let mut stack = vec![path.to_path_buf()];
     let mut objects = BTreeMap::<_, (ObjectMeasurements, u64)>::new();
@@ -524,6 +551,13 @@ fn measure_store(
     let mut allocated_bytes = Some(0_u64);
     let mut extents = Vec::new();
     let mut observations = Vec::new();
+    if volume_has_snapshots {
+        observations.push(observation(
+            SignalId::VolumeHasSnapshots,
+            ObservationRelation::PossibleWidthExplanation,
+            ObservationScope::Volume,
+        ));
+    }
     for (measured, covered_link_count) in objects.values() {
         logical_bytes = logical_bytes
             .checked_add(measured.logical_bytes)

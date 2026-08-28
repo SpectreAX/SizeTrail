@@ -103,6 +103,7 @@ pub enum InventoryGapReason {
     RuntimeSizeUnavailable,
     TimedOut,
     RuleSetInvalid,
+    VolumeSnapshotStateUnavailable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -115,6 +116,7 @@ pub enum InventoryStage {
     SimctlRuntimes,
     RuleEvaluation,
     ToolchainProbe,
+    VolumeSnapshots,
 }
 
 impl InventoryStage {
@@ -128,6 +130,7 @@ impl InventoryStage {
             Self::SimctlRuntimes => "simctl_runtimes",
             Self::RuleEvaluation => "rule_evaluation",
             Self::ToolchainProbe => "toolchain_probe",
+            Self::VolumeSnapshots => "volume_snapshots",
         }
     }
 }
@@ -330,7 +333,7 @@ mod tests {
     fn xcode_inventory_joins_static_stores_and_simctl_identity() {
         let home = fixture_home();
         let root = Root::open(&home).expect("fixture root must initialize");
-        let adapter = xcode::XcodeAdapter::new(&root, &[]);
+        let adapter = xcode::XcodeAdapter::new(&root, &[], Ok(false));
         let state = AdapterState::Ready {
             version: "16.4 (16F6)".to_owned(),
         };
@@ -399,7 +402,7 @@ mod tests {
         let fixture = tempfile::tempdir().expect("fixture root must be created");
         let home = std::fs::canonicalize(fixture.path()).expect("fixture must canonicalize");
         let root = Root::open(&home).expect("fixture root must initialize");
-        let adapter = xcode::XcodeAdapter::new(&root, &[]);
+        let adapter = xcode::XcodeAdapter::new(&root, &[], Ok(false));
         let state = AdapterState::Degraded {
             observed_version: Some("999.0 (Fixture)".to_owned()),
             reason: AdapterDegradedReason::UnknownVersion,
@@ -419,7 +422,7 @@ mod tests {
         let home = fixture_home();
         let root = Root::open(&home).expect("fixture root must initialize");
         let devices = root.path().join("Library/Developer/CoreSimulator/Devices");
-        let adapter = xcode::XcodeAdapter::new(&root, std::slice::from_ref(&devices));
+        let adapter = xcode::XcodeAdapter::new(&root, std::slice::from_ref(&devices), Ok(false));
         let state = AdapterState::Ready {
             version: "16.4 (16F6)".to_owned(),
         };
@@ -447,7 +450,7 @@ mod tests {
     fn xcode_fixture_payload_is_byte_stable_across_scans() {
         let home = fixture_home();
         let root = Root::open(&home).expect("fixture root must initialize");
-        let adapter = xcode::XcodeAdapter::new(&root, &[]);
+        let adapter = xcode::XcodeAdapter::new(&root, &[], Ok(false));
         let state = AdapterState::Ready {
             version: "16.4 (16F6)".to_owned(),
         };
@@ -464,6 +467,64 @@ mod tests {
         assert_eq!(
             serde_json::to_vec(&first).expect("first payload must serialize"),
             serde_json::to_vec(&second).expect("second payload must serialize")
+        );
+    }
+
+    #[test]
+    fn volume_snapshot_state_is_a_typed_signal_or_an_explicit_gap() {
+        let home = fixture_home();
+        let root = Root::open(&home).expect("fixture root must initialize");
+        let state = AdapterState::Ready {
+            version: "16.4 (16F6)".to_owned(),
+        };
+        let with_snapshots = xcode::XcodeAdapter::new(&root, &[], Ok(true));
+        let mut ctx = PolicyCtx::for_test(INVENTORY_POLICIES);
+        let inventory = with_snapshots.inventory(&mut ctx, &state);
+        assert!(inventory.items.iter().any(|item| {
+            item.observations
+                .iter()
+                .any(|signal| signal.signal == crate::model::SignalId::VolumeHasSnapshots)
+        }));
+
+        let unavailable = xcode::XcodeAdapter::new(&root, &[], Err(None));
+        let mut ctx = PolicyCtx::for_test(INVENTORY_POLICIES);
+        let inventory = unavailable.inventory(&mut ctx, &state);
+        assert!(
+            inventory
+                .gaps
+                .iter()
+                .any(|gap| { gap.reason == InventoryGapReason::VolumeSnapshotStateUnavailable })
+        );
+    }
+
+    #[test]
+    #[ignore = "records a runner-specific fixture benchmark for publication"]
+    fn xcode_inventory_fixture_benchmark() {
+        let home = fixture_home();
+        let root = Root::open(&home).expect("fixture root must initialize");
+        let adapter = xcode::XcodeAdapter::new(&root, &[], Ok(false));
+        let state = AdapterState::Ready {
+            version: "16.4 (16F6)".to_owned(),
+        };
+        let mut samples = Vec::new();
+        for _ in 0..5 {
+            let mut ctx = PolicyCtx::for_test(INVENTORY_POLICIES);
+            let started = std::time::Instant::now();
+            let inventory = adapter.inventory(&mut ctx, &state);
+            let elapsed = started.elapsed().as_nanos();
+            assert!(!inventory.items.is_empty());
+            samples.push(elapsed);
+        }
+        samples.sort_unstable();
+        println!(
+            "SIZETRAIL_BENCHMARK_JSON={}",
+            serde_json::json!({
+                "adapter": "xcode",
+                "scope": "checked_in_fixture_inventory_with_stubbed_simctl",
+                "iterations": samples.len(),
+                "median_wall_nanoseconds": samples[samples.len() / 2],
+                "all_wall_nanoseconds": samples,
+            })
         );
     }
 }

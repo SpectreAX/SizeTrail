@@ -177,6 +177,14 @@ enum Scope { Object, Inode, Volume }
 - `filesystem_compressed` 高优先级展示为「private floor 不提供信息」，同时保留完整信号。
 - 不得指出某个文件被哪个具体快照保留 —— 公开 API 没有 file extent → snapshot 映射。只能表述为「共享块或快照导致的不确定性」，并可并列显示该卷的快照事实。
 
+卷级快照事实通过公开 `fs_snapshot_list(2)` 瞬时枚举，不运行 `diskutil`。实现先以
+`statfs(scan_root).f_mntonname` 找到真实 mount root，打开后用 `fstatfs(fd).f_fsid`
+回验，再读取首批结果；返回值大于 0 已足以证明“存在”，无需枚举或保存名称。任一步失败都产生
+`volume_snapshot_state_unavailable`，不得当作“无快照”。该事实只说明枚举瞬间卷上
+是否存在快照，不提供 extent → snapshot 归因，也不构成扫描期间稳定性证明。hosted
+runner 只要求验证“枚举成功（允许 0 条）”与非 mount-root 的 `EINVAL`；至少一条快照
+的正例由维护者普通用户机器实测，不能被一份通常为 0 条的绿色 hosted suite 冒充。
+
 ### 2.5 属性能力门控（Q12）
 
 所有 `getattrlist` 属性使用前必须检查三项：**volume capability、capability 的 `valid` 位、`ATTR_CMN_RETURNED_ATTRS` 返回掩码**。
@@ -244,7 +252,8 @@ SIP 默认启用。把它当免费安全网，但不得依赖它作为唯一防�
 
 ### 3.4 依赖的系统工具
 
-已确认可用：`tmutil`、`brctl`、`mdutil`、`diskutil`、`xcrun`。`fd` 不存在 → 不得依赖，自行实现并行遍历。
+已确认可用：`tmutil`、`brctl`、`mdutil`、`diskutil`、`xcrun`。`fd` 不存在 → 不得依赖；
+v0.1 使用 §4 的受控串行遍历，不为未经测量的并发收益绕过 `Root` 边界。
 
 **所有外部命令必须：** 由 policy registry 固定绝对 executable、参数、环境与调用上限 → 缺失时记 `not_present`（退出码 0，非失败）→ 版本落在已验证范围外时显式降级 → 绝不 panic。不得额外依赖 PATH-sensitive `which`；developer-tool shim 的文件存在也不构成工具链可用证据（Q35）。
 
@@ -258,11 +267,11 @@ SIP 默认启用。把它当免费安全网，但不得依赖它作为唯一防�
 |---|---|---|
 | 语言 | Rust stable | 单二进制无运行时；类型系统可静态排除写路径 |
 | CLI | `clap` builder API | 标准选择，自带 completion 生成；不用 derive，因为 derive 宏会注入 lint `allow`，与 crate root 的 `forbid(clippy::disallowed_methods)` 冲突。不得仅为减少样板而重新启用 derive |
-| 并行遍历 | `jwalk` 或 `ignore::WalkBuilder` | 并行 walk，显著快于 `walkdir` |
+| 遍历 | `std::fs::read_dir` 经 `Root` 串行调度 | v0.1 先保证 exclude-before-probe、mount/firmlink 与 materialization gate 不被第三方 walker 绕过；CI 记录真实 benchmark，只有数据证明需要时再为并发重新建模这些边界 |
 | 序列化 | `serde` + `serde_json` + `toml` | 规则表 TOML，输出 JSON |
-| 错误 | `anyhow`（应用层）+ `thiserror`（库层） | — |
-| 日志 | `tracing` + `tracing-subscriber` | `--debug` 开启结构化日志，写 stderr |
-| 测试 | `cargo test` + `insta` + `assert_cmd` + `tempfile` + `proptest` | 见 §10 |
+| 错误 | `std::io::Error` + typed enums | 当前错误面无需额外依赖 |
+| 诊断 | 直接写 stderr | 不写日志文件，不引入 logging framework |
+| 测试 | `cargo test` + `assert_cmd` + `tempfile` + `xattr` | 见 §10 |
 
 **不要引入：** `ratatui` / `crossterm`（Q19 已删 TUI）、`trash`（Q11 已删写操作）、async 运行时、ORM、任何网络库、任何 GUI 框架。
 
@@ -367,20 +376,20 @@ payload 只保留稳定 typed warning。
 ```
 src/
   main.rs
-  cli/           命令定义与分派
-  render/        text.rs（流式）json.rs（确定性）
-  model/         finding.rs signal.rs advice.rs interval.rs
-  adapters/      mod.rs（契约）xcode.rs homebrew.rs docker.rs
-  rules/         loader.rs schema.rs builtin/*.toml
-  capacity/      plane1.rs（容量事实与口径标注）
-  fsx/           attrs.rs（getattrlist）dedupe.rs root.rs
-  policy/    ★   sideeffect.rs（外部命令闸门 + registry）
+  model.rs       finding / signal / advice / interval
+  scan.rs        report composition
+  adapters/      mod.rs（契约）+ xcode.rs
+  rules/         mod.rs + builtin/*.toml
+  capacity.rs    plane 1 容量事实与口径标注
+  fsx/           mod.rs（Root）+ sys.rs（唯一 unsafe/FFI 边界）
+  policy.rs  ★   外部命令闸门 + registry
 tests/
-  fixtures/      伪造 HOME 树的构造器 + APFS 反例构造器
-  apfs_*.rs      §2 计量正确性测试（含 decisions.md 附录 B 全部反例）
+  support/       伪造 HOME 树与零写快照器
+  fixtures/      checked-in Xcode HOME / rule / APFS evidence fixtures
+  apfs_*.rs      §2 计量正确性测试（含 decisions.md 附录 B 反例）
   policy_*.rs    ★ 零写与副作用上限测试
   cli_*.rs       端到端（全部走 --root）
-  snapshots/     insta 快照 + payload 逐字节 fixture
+  scan_json.rs   payload 逐字节与部分失败契约
 ```
 
 **`--root` 沙箱保留。** 永久只读后它不再是删除防护，而是**测试注入机制** —— 引擎全程只通过可注入的 `Root` 抽象访问文件系统，使 fixture 测试无需真实 HOME。这条能力是 §10 测试策略成立的前提。
@@ -644,15 +653,21 @@ cargo audit
 
 ### 10.4 发布前人工验证
 
-自动化测试无法覆盖真实 macOS 的权限与路径现实。每个 minor 发布前，在**新建的测试用户账户**上执行：
+自动化测试无法覆盖真实 macOS 的全部权限与路径现实。每个 minor 发布前，在 required
+hosted lane 的临时普通用户账户与维护者普通用户账户上共同执行；两类证据的边界不得
+互相冒充：
 
 1. `sizetrail doctor` — 在 SizeTrail 的真实 target 上分别验证可读与策略拒绝；核对
    target、stage、errno 与 typed status。**不把测试结果改写为全局 FDA 状态**
 2. `sizetrail scan` — 三平面数字的口径标注是否正确、coverage gap 是否诚实
 3. `sizetrail scan --json | jq` — schema 完整性
-4. 未安装 Docker 的机器上 — 断言 `not_present` 且退出码 0
-5. 有本地快照的机器上 — 断言区间宽度与信号表述正确，**未虚构具体快照归因**
-6. 全程用 `fs_usage` 或等价手段抓取 — **确认无任何写操作**
+4. 仅选中 Command Line Tools、无完整 Xcode 的机器上 — 断言 Xcode `not_present` 且退出码 0
+5. 有本地快照的机器上 — 实测 `fs_snapshot_list` 正例，并与强制 snapshot=true 的
+   分类 fixture 共同断言 typed signal 与区间表述；**不得把这两段组合证据描述成
+   hosted end-to-end 正例，也不得虚构具体快照归因**
+6. required hosted lane 全程运行 deny-write Seatbelt 门禁；fixture 同时运行
+   TreeSnapshot 与高价值真实路径兜底。两者只覆盖调用进程，未沙箱化 daemon 的空格
+   继续留在 §12.1
 
 ---
 
@@ -755,6 +770,8 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | dyld USDT/DOF 注册 `/dev/dtracehelper` | — | — | 精确允许 `file-write-data` | — | 平台 loader 行为；literal device + exact operation 是唯一 Seatbelt 例外，其他 `/dev` 写不允许 |
 | `getattrlist` | unsafe 仅限 `fsx/sys.rs` | 是 | 是 | — | Rust/C object 与 volume 差分、APFS fixtures；返回 mask/volume valid 逐项检查 |
 | `statfs` | 同上 | 是 | 是 | — | capacity fixture；仅作显式 basis 与 `SPACEUSED` 失败回退 |
+| `fstatfs` | 同上 | 是 | 是 | — | 打开 mount root 后回验当前 mount-session `fsid`，拒绝解析期间的 unmount/remount 竞态 |
+| `fs_snapshot_list` | 同上 | 是 | 是 | — | 只请求 name + returned mask；首批返回大于 0 即为存在，Data 卷 0 条成功、非 mount-root `EINVAL`；维护者机器的 System 卷为 snapshot-positive 实证，hosted 不声称正例 |
 | `setiopolicy_np` | 同上 | 是 | 不适用（刻意修改进程策略） | — | atime/materialize/mount-trigger 三项均 set 后 get 验证；失败阻断 root |
 | `getiopolicy_np` | 同上 | 是 | 是 | — | policy round-trip fixture |
 | `CFURLCreateFromFileSystemRepresentation` | 同上 | 是 | 是 | — | capacity fixture；仅创建内存 URL |
@@ -777,7 +794,7 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | 内置 TOML 规则解析 | 无外置 rules path；`include_str!` 编入 | — | scan sandbox 覆盖依赖运行路径 | — | schema `deny_unknown_fields`、无 command 字段、每条 rule + fixture 分类断言；toml crate 未执行路径仍不作全局保证 |
 | `explain --from file` 显式报告文件读取 | safe read API；无写 API | — | read-only harness / sandbox 覆盖写尝试 | — | 仅用户指定报告；先 IOPOL + dataless gate；不重探 finding path、不运行 adapter。stdin 模式无文件读取 |
 | `completion` 生成 | safe stdout | — | snapshot harness + sandbox | — | clap builder + `clap_complete` 只写 stdout；集成测试断言 cwd 无新文件 |
-| 人类 finding 输出 | safe stdout/stderr | — | sandbox 明确允许输出 fd | — | 文案不稳定；稳定面是 JSON typed signals。当前实现逐 finding 输出但仍在 inventory 完成后开始 |
+| 人类 finding 输出 | safe stdout/stderr | — | sandbox 明确允许输出 fd | — | 文案不稳定；稳定面是 JSON typed signals。当前实现每个 inventory stage 完成后立即输出该 stage 的 findings，不等待全部 adapter 完成 |
 | simctl stderr | safe stderr | — | sandbox 明确允许 stderr fd | 是 | 原文只写 stderr；payload 仅 `simctl_stderr_nonempty` 稳定标签，避免主机文本污染 fixture |
 | build script | crate root 不覆盖 | 明确断言不存在 | sandbox 构建后不覆盖 | — | 新增前必须重新开门禁 |
 | dependency crate 内部写 | 不覆盖依赖源码 | 无直接 libc 只缩小本 crate FFI | 是（仅运行到的路径） | — | 未执行依赖路径与任意 daemon 写 **未覆盖** |

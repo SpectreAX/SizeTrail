@@ -32,8 +32,15 @@ pub fn xcode_report_with_sink(
     excludes: &[std::path::PathBuf],
     mut finding_sink: impl FnMut(&Finding),
 ) -> AdapterReport {
-    let adapter = XcodeAdapter::new(root, excludes);
-    let state = adapter.probe(ctx);
+    let probe_adapter = XcodeAdapter::new(root, excludes, Err(None));
+    let state = probe_adapter.probe(ctx);
+    let snapshot_state = if matches!(state, AdapterState::Ready { .. }) {
+        root.volume_has_snapshots()
+            .map_err(|error| error.raw_os_error())
+    } else {
+        Err(None)
+    };
+    let adapter = XcodeAdapter::new(root, excludes, snapshot_state);
     let mut inventory = crate::adapters::Inventory::default();
     let mut findings = Vec::new();
     adapter.visit_inventory_stages(ctx, &state, |mut stage| {
@@ -162,6 +169,9 @@ const fn coverage_reason(reason: InventoryGapReason) -> CoverageGapReason {
         InventoryGapReason::RuntimeSizeUnavailable => CoverageGapReason::RuntimeSizeUnavailable,
         InventoryGapReason::TimedOut => CoverageGapReason::TimedOut,
         InventoryGapReason::RuleSetInvalid => CoverageGapReason::RuleSetInvalid,
+        InventoryGapReason::VolumeSnapshotStateUnavailable => {
+            CoverageGapReason::VolumeSnapshotStateUnavailable
+        }
     }
 }
 
@@ -179,6 +189,7 @@ const fn gap_reason_id(reason: InventoryGapReason) -> &'static str {
         InventoryGapReason::RuntimeSizeUnavailable => "runtime_size_unavailable",
         InventoryGapReason::TimedOut => "timed_out",
         InventoryGapReason::RuleSetInvalid => "rule_set_invalid",
+        InventoryGapReason::VolumeSnapshotStateUnavailable => "volume_snapshot_state_unavailable",
     }
 }
 

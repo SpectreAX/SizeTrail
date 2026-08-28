@@ -307,6 +307,10 @@ impl Root {
         ))
     }
 
+    pub fn volume_has_snapshots(&self) -> io::Result<bool> {
+        sys::snapshot_count(&self.path_c).map(|count| count != 0)
+    }
+
     fn checked_path(&self, path: &Path) -> io::Result<CString> {
         require_normalized_absolute(path)?;
         if !path.starts_with(&self.path) {

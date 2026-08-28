@@ -1,11 +1,15 @@
 #![allow(unsafe_code)]
 
 use std::ffi::{CStr, c_char, c_int, c_void};
+use std::fs::File;
 use std::io;
 use std::mem::MaybeUninit;
+use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
 
 const ATTR_BIT_MAP_COUNT: u16 = 5;
 const ATTR_CMN_FSID: u32 = 0x0000_0004;
+const ATTR_CMN_NAME: u32 = 0x0000_0001;
 const ATTR_CMN_FILEID: u32 = 0x0200_0000;
 const ATTR_CMN_RETURNED_ATTRS: u32 = 0x8000_0000;
 const ATTR_VOL_SIZE: u32 = 0x0000_0004;
@@ -75,6 +79,14 @@ struct StatFs {
 }
 
 unsafe extern "C" {
+    fn fs_snapshot_list(
+        directory: c_int,
+        attributes: *mut AttrList,
+        buffer: *mut c_void,
+        buffer_size: usize,
+        flags: u32,
+    ) -> c_int;
+    fn fstatfs(file: c_int, stats: *mut StatFs) -> c_int;
     fn getattrlist(
         path: *const c_char,
         attributes: *const AttrList,
@@ -258,6 +270,37 @@ pub(super) fn object(path: &CStr) -> io::Result<ObjectRaw> {
 }
 
 pub(super) fn filesystem(path: &CStr) -> io::Result<StatFsRaw> {
+    let stats = call_statfs(path)?;
+    Ok(StatFsRaw {
+        block_size: u64::from(stats.block_size),
+        blocks: stats.blocks,
+        blocks_free: stats.blocks_free,
+        blocks_available: stats.blocks_available,
+    })
+}
+
+pub(super) fn snapshot_count(path: &CStr) -> io::Result<usize> {
+    let path_stats = call_statfs(path)?;
+    // SAFETY: successful statfs initializes mounted_on as a NUL-terminated C array.
+    let mounted_on = unsafe { CStr::from_ptr(path_stats.mounted_on.as_ptr()) };
+    let mount_root = File::open(std::ffi::OsStr::from_bytes(mounted_on.to_bytes()))?;
+    let mut root_stats = MaybeUninit::<StatFs>::zeroed();
+    // SAFETY: the file descriptor is live and the output points to correctly laid-out storage.
+    let status = unsafe { fstatfs(mount_root.as_raw_fd(), root_stats.as_mut_ptr()) };
+    if status == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: successful fstatfs initialized the structure.
+    let root_stats = unsafe { root_stats.assume_init() };
+    if root_stats.fsid != path_stats.fsid {
+        return Err(io::Error::other(
+            "volume changed while resolving its mounted root",
+        ));
+    }
+    snapshot_count_fd(&mount_root)
+}
+
+fn call_statfs(path: &CStr) -> io::Result<StatFs> {
     let mut stats = MaybeUninit::<StatFs>::zeroed();
     // SAFETY: the pointer addresses a correctly laid-out allocation and is read
     // only after a checked successful call.
@@ -266,13 +309,36 @@ pub(super) fn filesystem(path: &CStr) -> io::Result<StatFsRaw> {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: successful statfs initialized the structure.
-    let stats = unsafe { stats.assume_init() };
-    Ok(StatFsRaw {
-        block_size: u64::from(stats.block_size),
-        blocks: stats.blocks,
-        blocks_free: stats.blocks_free,
-        blocks_available: stats.blocks_available,
-    })
+    Ok(unsafe { stats.assume_init() })
+}
+
+fn snapshot_count_fd(mount_root: &File) -> io::Result<usize> {
+    let mut attributes = AttrList {
+        bitmap_count: ATTR_BIT_MAP_COUNT,
+        reserved: 0,
+        common: ATTR_CMN_NAME | ATTR_CMN_RETURNED_ATTRS,
+        volume: 0,
+        directory: 0,
+        file: 0,
+        fork: 0,
+    };
+    let mut buffer = vec![0_u8; 8 * 1024];
+    // SAFETY: the descriptor is a verified mounted-volume root, flags are zero,
+    // and both ABI structures remain live for the checked call.
+    let status = unsafe {
+        fs_snapshot_list(
+            mount_root.as_raw_fd(),
+            &raw mut attributes,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            0,
+        )
+    };
+    if status == -1 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(status as usize)
+    }
 }
 
 pub(super) fn important_capacity(path: &CStr) -> io::Result<u64> {
@@ -455,7 +521,9 @@ pub(super) mod bits {
 
 #[cfg(test)]
 mod tests {
-    use super::{AttrList, AttributeSet, StatFs, install_read_policies};
+    use std::fs::File;
+
+    use super::{AttrList, AttributeSet, StatFs, install_read_policies, snapshot_count_fd};
 
     #[test]
     fn copied_darwin_abi_layouts_match_the_sdk() {
@@ -467,5 +535,14 @@ mod tests {
     #[test]
     fn read_induced_write_guards_set_and_verify_on_this_process() {
         install_read_policies().expect("read I/O policies must round-trip");
+    }
+
+    #[test]
+    fn snapshot_listing_rejects_a_non_root_directory_descriptor() {
+        let fixture = tempfile::tempdir().expect("fixture directory must be created");
+        let directory = File::open(fixture.path()).expect("fixture directory must open");
+        let error = snapshot_count_fd(&directory)
+            .expect_err("snapshot listing requires the mounted filesystem root");
+        assert_eq!(error.raw_os_error(), Some(22));
     }
 }

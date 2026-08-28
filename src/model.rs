@@ -377,6 +377,7 @@ pub enum CoverageGapReason {
     RuntimeSizeUnavailable,
     TimedOut,
     RuleSetInvalid,
+    VolumeSnapshotStateUnavailable,
     ExcludedByUser,
 }
 
