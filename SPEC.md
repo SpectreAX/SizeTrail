@@ -852,6 +852,7 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 |---|---|---|
 | 用户期待清理却只得到解释 | 「找到 60GB 然后什么都做不了」的负面反馈 | Q7 已记录这是刻意选择；每个 observe-only 项必须给出该工具链官方的确切命令 —— 把「碰不了」转为「教你怎么办」 |
 | TCC 或其他策略导致扫描不完整 | 归因失真、用户不信任 | §3.1 逐 target typed capability + 原始 errno + 退出码 3 + `doctor` 指引；**绝不静默报 0，也不把 `EPERM` 唯一归因为 FDA** |
+| SizeTrail 近似标风险 | 品牌投入后被迫改名 | Q41 已完成 preview 前人工近似筛查；`FILETRAIL`（US 99272187）保留黄色风险；不声称法律清权，商用扩张前做律师 clearance |
 | iCloud materialization | **违反只读契约，产生真实下载与写入** | §3.2 强制 `IOPOL_MATERIALIZE_DATALESS_FILES_OFF` 并验证；失败即记 unknown |
 | adapter 包装的第三方 CLI 输出格式变化 | 解析失败或**静默误读** | §5.2 钉住已验证版本范围 + 未知版本显式降级。**这是本架构最大的长期维护风险** |
 | macOS 大版本挪动路径 | 规则失效 | §6 规则数据化 + `os` 门控 + 每次大版本后回归 |
