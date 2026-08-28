@@ -65,6 +65,7 @@ mod tests {
                 arguments: &[],
                 environment: &[],
                 remove_environment: &[],
+                timeout_millis: 10_000,
             },
         },
         ProbePolicy {
@@ -76,6 +77,7 @@ mod tests {
                 arguments: &["Xcode 26.0\nBuild version Fixture\n"],
                 environment: &[],
                 remove_environment: &[],
+                timeout_millis: 10_000,
             },
         },
         ProbePolicy {
@@ -87,6 +89,7 @@ mod tests {
                 arguments: &[],
                 environment: &[],
                 remove_environment: &[],
+                timeout_millis: 10_000,
             },
         },
     ];
@@ -101,6 +104,7 @@ mod tests {
                 arguments: &["/Applications/Xcode.app/Contents/Developer\n"],
                 environment: &[],
                 remove_environment: &[],
+                timeout_millis: 10_000,
             },
         },
         ProbePolicy {
@@ -112,6 +116,7 @@ mod tests {
                 arguments: &["Xcode 999.0\nBuild version Fixture\n"],
                 environment: &[],
                 remove_environment: &[],
+                timeout_millis: 10_000,
             },
         },
         ProbePolicy {
@@ -123,6 +128,7 @@ mod tests {
                 arguments: &[],
                 environment: &[],
                 remove_environment: &[],
+                timeout_millis: 10_000,
             },
         },
     ];

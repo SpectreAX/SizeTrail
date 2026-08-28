@@ -499,7 +499,7 @@ enum Advice {
 | 外部命令写状态 | 闭集白名单，每条命令单独审计并记录其只读性依据 |
 | CoreSimulatorService 启动 | 裸命令不自动探测；只在显式子命令下发起（Q22） |
 
-**side-effect registry（Q17）：** 记录每个 probe 每次扫描的**最大调用次数**及关闭开关。registry 是数据，测试断言实际调用次数不超过声明值。
+**side-effect registry（Q17）：** 记录每个 probe 每次扫描的**最大调用次数**、关闭开关及硬 timeout。registry 是数据，测试断言实际调用次数不超过声明值；timeout 必须终止并回收子进程，且映射为 typed `unmeasurable`，不能令完整 JSON 缺失。
 
 ### 8.3 明令禁止
 
@@ -745,7 +745,7 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | `/usr/bin/xcode-select -p` | `Command` 仅 policy | — | P3 尚未接入 scan sandbox | 是，max 1 | 生产 probe 测试实际执行；只判 selection，标准 CLT → `not_present` |
 | `/usr/bin/xcodebuild -version` | `Command` 仅 policy | — | P3 尚未接入 scan sandbox | 是，max 1 | 仅 selection 为完整 Xcode 候选后运行；固定 locale/清除重定向环境；未知版本降级 |
 | `/usr/bin/xcodebuild -checkFirstLaunchStatus` | `Command` 仅 policy | — | P3 尚未接入 scan sandbox | 是，max 1 | 仅已验证版本运行；非零为 `not_ready`，绝不调用写入型 `-runFirstLaunch` / `-license accept` |
-| P3 child stdout/stderr 与进程生命周期 | `Command` 仅 policy | — | P3 尚未接入 scan sandbox | 是 | 固定命令输出由 policy 捕获；命令 hang 的硬 timeout 留给 P4 `simctl` 接入前实现，当前为**未覆盖** |
+| child stdout/stderr 与进程生命周期 | `Command` 仅 policy | — | 完整 scan sandbox 覆盖调用进程 | 是 | 固定输出由 policy 并行排空；registry 硬 timeout 会终止并回收子进程，单测断言 typed `timed_out` 与调用计数 |
 | P3 probe 诱发未沙箱化 daemon 状态变化 | — | — | 不覆盖 daemon | 是（只限制调用次数） | 本机未观察到启动 CoreSimulatorService；hosted 前后状态尚未机械验证，**未覆盖** |
 | build script | crate root 不覆盖 | 明确断言不存在 | sandbox 构建后不覆盖 | — | 新增前必须重新开门禁 |
 | dependency crate 内部写 | 不覆盖依赖源码 | 无直接 libc 只缩小本 crate FFI | 是（仅运行到的路径） | — | 未执行依赖路径与任意 daemon 写 **未覆盖** |

@@ -3,7 +3,10 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
-use std::process::Command;
+use std::io::{self, Read};
+use std::process::{Child, Command, Stdio};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ProbeId(&'static str);
@@ -32,6 +35,7 @@ pub struct ReadOnlyCommand {
     pub arguments: &'static [&'static str],
     pub environment: &'static [(&'static str, &'static str)],
     pub remove_environment: &'static [&'static str],
+    pub timeout_millis: u64,
 }
 
 pub const XCODE_SELECT_DEVELOPER_DIR: ProbeId = ProbeId::new("xcode.select_developer_dir");
@@ -58,6 +62,7 @@ pub const SIDE_EFFECT_REGISTRY: &[ProbePolicy] = &[
             arguments: &["-p"],
             environment: XCODE_PROBE_ENVIRONMENT,
             remove_environment: XCODE_REMOVED_ENVIRONMENT,
+            timeout_millis: 10_000,
         },
     },
     ProbePolicy {
@@ -69,6 +74,7 @@ pub const SIDE_EFFECT_REGISTRY: &[ProbePolicy] = &[
             arguments: &["-version"],
             environment: XCODE_PROBE_ENVIRONMENT,
             remove_environment: XCODE_REMOVED_ENVIRONMENT,
+            timeout_millis: 10_000,
         },
     },
     ProbePolicy {
@@ -80,6 +86,7 @@ pub const SIDE_EFFECT_REGISTRY: &[ProbePolicy] = &[
             arguments: &["-checkFirstLaunchStatus"],
             environment: XCODE_PROBE_ENVIRONMENT,
             remove_environment: XCODE_REMOVED_ENVIRONMENT,
+            timeout_millis: 10_000,
         },
     },
 ];
@@ -90,6 +97,7 @@ pub enum PolicyError {
     Disabled(ProbeId),
     CallLimitExceeded(ProbeId),
     InvocationFailed(ProbeId),
+    TimedOut(ProbeId),
 }
 
 impl fmt::Display for PolicyError {
@@ -99,6 +107,7 @@ impl fmt::Display for PolicyError {
             Self::Disabled(id) => ("probe disabled by environment", id),
             Self::CallLimitExceeded(id) => ("probe call limit exceeded", id),
             Self::InvocationFailed(id) => ("probe invocation failed", id),
+            Self::TimedOut(id) => ("probe timed out", id),
         };
         write!(formatter, "{message}: {}", id.as_str())
     }
@@ -141,15 +150,43 @@ impl PolicyCtx<'_> {
         for key in command.remove_environment {
             process.env_remove(key);
         }
-        let output = process
-            .output()
+        let mut child = process
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|_| PolicyError::InvocationFailed(id))?;
+        let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+            terminate(&mut child, id)?;
+            return Err(PolicyError::InvocationFailed(id));
+        };
+        let stdout = read_all(stdout);
+        let stderr = read_all(stderr);
+        let deadline = Instant::now() + Duration::from_millis(command.timeout_millis);
 
-        Ok(ReadOnlyOutput {
-            success: output.status.success(),
-            stdout: output.stdout,
-            stderr: output.stderr,
-        })
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    return Ok(ReadOnlyOutput {
+                        success: status.success(),
+                        stdout: join_output(stdout, id)?,
+                        stderr: join_output(stderr, id)?,
+                    });
+                }
+                Ok(None) if Instant::now() >= deadline => {
+                    terminate(&mut child, id)?;
+                    join_output(stdout, id)?;
+                    join_output(stderr, id)?;
+                    return Err(PolicyError::TimedOut(id));
+                }
+                Ok(None) => thread::sleep(Duration::from_millis(5)),
+                Err(_) => {
+                    terminate(&mut child, id)?;
+                    join_output(stdout, id)?;
+                    join_output(stderr, id)?;
+                    return Err(PolicyError::InvocationFailed(id));
+                }
+            }
+        }
     }
 
     #[must_use]
@@ -163,6 +200,34 @@ pub struct ReadOnlyOutput {
     pub success: bool,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
+}
+
+fn read_all(mut stream: impl Read + Send + 'static) -> JoinHandle<io::Result<Vec<u8>>> {
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        stream.read_to_end(&mut output)?;
+        Ok(output)
+    })
+}
+
+fn join_output(
+    reader: JoinHandle<io::Result<Vec<u8>>>,
+    id: ProbeId,
+) -> Result<Vec<u8>, PolicyError> {
+    reader
+        .join()
+        .map_err(|_| PolicyError::InvocationFailed(id))?
+        .map_err(|_| PolicyError::InvocationFailed(id))
+}
+
+fn terminate(child: &mut Child, id: ProbeId) -> Result<(), PolicyError> {
+    let kill_failed = child.kill().is_err();
+    let wait_failed = child.wait().is_err();
+    if kill_failed || wait_failed {
+        Err(PolicyError::InvocationFailed(id))
+    } else {
+        Ok(())
+    }
 }
 
 impl InvocationTracker<'static> {
@@ -256,6 +321,7 @@ mod tests {
         for policy in SIDE_EFFECT_REGISTRY {
             assert_eq!(policy.command.environment, XCODE_PROBE_ENVIRONMENT);
             assert_eq!(policy.command.remove_environment, XCODE_REMOVED_ENVIRONMENT);
+            assert_eq!(policy.command.timeout_millis, 10_000);
         }
     }
 
@@ -283,6 +349,7 @@ mod tests {
                 arguments: &[],
                 environment: &[],
                 remove_environment: &[],
+                timeout_millis: 10_000,
             },
         }];
 
@@ -298,5 +365,26 @@ mod tests {
         assert_eq!(actual_calls, 1);
         assert_eq!(tracker.count(DECLARED_ID), 1);
         assert_eq!(tracker.count(UNDECLARED_ID), 0);
+    }
+
+    #[test]
+    fn command_runner_terminates_a_probe_at_its_registered_timeout() {
+        const SLOW_ID: ProbeId = ProbeId::new("fixture.slow");
+        const POLICIES: &[ProbePolicy] = &[ProbePolicy {
+            id: SLOW_ID,
+            max_calls_per_scan: 1,
+            disable_env: "SIZETRAIL_NO_SLOW_FIXTURE",
+            command: ReadOnlyCommand {
+                program: "/bin/sleep",
+                arguments: &["1"],
+                environment: &[],
+                remove_environment: &[],
+                timeout_millis: 10,
+            },
+        }];
+        let mut ctx = super::PolicyCtx::for_test(POLICIES);
+
+        assert_eq!(ctx.run(SLOW_ID), Err(PolicyError::TimedOut(SLOW_ID)));
+        assert_eq!(ctx.count(SLOW_ID), 1);
     }
 }
