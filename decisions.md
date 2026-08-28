@@ -734,6 +734,18 @@ Q28 的哨兵同时收紧：START/END 不得只匹配 message token，必须在�
 
 ---
 
+## Q36 — inventory 显式消费 probe 状态
+
+**决策：`ToolchainAdapter::inventory` 必须显式接收同一次扫描所得的 `AdapterState`。每个 adapter 每次扫描只运行一次 `probe`；不得为 inventory 重复探测，也不得用内部可变状态在两个阶段之间传递版本或可用性。**
+
+P3 的契约只把 `PolicyCtx` 传给 `inventory`，却没有传入 `probe` 的结果。P4 开始，inventory 必须依据版本门控决定是否运行 `simctl`。原签名会迫使实现三选一：重复运行 probe（违反 side-effect registry 的调用上限）、忽略版本门控（违反 adapter contract），或把 probe 结果藏进 interior mutability（违反显式副作用状态原则）。显式参数是最小修正，也让调用顺序可由类型和测试直接审计。
+
+被否：inventory 重复调用 probe；adapter 内部缓存最近一次状态；inventory 自行重新判断版本。
+
+影响：`SPEC.md` §5.2；`src/adapters/mod.rs` 及各 adapter 实现。
+
+---
+
 ## 附录 A — 实测环境基线
 
 采集于 2026-08-26，作为规则表量级参考与回归基线：

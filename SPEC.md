@@ -299,7 +299,7 @@ trait ToolchainAdapter {
     fn probe(&self, ctx: &mut PolicyCtx) -> AdapterState;
 
     /// 枚举 store 对象。只读。
-    fn inventory(&self, ctx: &mut PolicyCtx) -> Inventory;
+    fn inventory(&self, ctx: &mut PolicyCtx, state: &AdapterState) -> Inventory;
 
     /// 归类：action/mechanism、recoverability、sensitivity（Q4）。
     fn classify(&self, inv: &Inventory) -> Vec<Finding>;
@@ -311,6 +311,8 @@ trait ToolchainAdapter {
 
 `PolicyCtx` 显式使用可变借用，因为每次外部 probe 都必须更新 P1 的运行时调用计数器。
 不得用内部可变性隐藏这一副作用状态，也不得让 adapter 绕过 context 自行起进程。
+同一次扫描所得的 `AdapterState` 必须显式传给 `inventory`（Q36）；每个 adapter 每次
+扫描只运行一次 `probe`，不得重复探测或在 adapter 内缓存隐式状态。
 
 **没有 `execute`。** 契约就是 `probe → inventory → classify → advise`（Q7 + Q11）。
 

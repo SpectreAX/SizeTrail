@@ -15,7 +15,7 @@ impl ToolchainAdapter for ContractFixture {
         AdapterState::NotPresent
     }
 
-    fn inventory(&self, _ctx: &mut PolicyCtx<'_>) -> Inventory {
+    fn inventory(&self, _ctx: &mut PolicyCtx<'_>, _state: &AdapterState) -> Inventory {
         Inventory
     }
 

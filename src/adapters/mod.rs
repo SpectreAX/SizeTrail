@@ -45,7 +45,7 @@ pub struct Inventory;
 pub trait ToolchainAdapter {
     fn id(&self) -> AdapterId;
     fn probe(&self, ctx: &mut PolicyCtx<'_>) -> AdapterState;
-    fn inventory(&self, ctx: &mut PolicyCtx<'_>) -> Inventory;
+    fn inventory(&self, ctx: &mut PolicyCtx<'_>, state: &AdapterState) -> Inventory;
     fn classify(&self, inventory: &Inventory) -> Vec<Finding>;
     fn advise(&self, finding: &Finding) -> Vec<Advice>;
 }
