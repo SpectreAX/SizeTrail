@@ -1,33 +1,56 @@
 #!/bin/bash
 set -euo pipefail
 
-roots=()
-for candidate in README.md docs site; do
-  if [[ -e "$candidate" ]]; then
-    roots+=("$candidate")
-  fi
-done
-
-if [[ ${#roots[@]} -eq 0 ]]; then
-  exit 0
+if [[ -e README.md ]]; then
+  python3 scripts/sync-generated-fragments.py
 fi
 
-if command -v rg >/dev/null 2>&1; then
-  matches="$(rg --line-number --glob '!docs/generated/**' -- '[0-9]' "${roots[@]}" || true)"
-else
-  files=()
-  while IFS= read -r -d '' file; do
-    files+=("$file")
-  done < <(find "${roots[@]}" -type f ! -path 'docs/generated/*' -print0)
+python3 - <<'PY'
+from pathlib import Path
+import re
+import sys
 
-  matches=""
-  if [[ ${#files[@]} -gt 0 ]]; then
-    matches="$(grep -nE -- '[0-9]' "${files[@]}" || true)"
-  fi
-fi
+roots = [Path(name) for name in ("README.md", "docs", "site") if Path(name).exists()]
+files = []
+for root in roots:
+    if root.is_file():
+        files.append(root)
+    else:
+        files.extend(path for path in root.rglob("*") if path.is_file())
 
-if [[ -n "$matches" ]]; then
-  echo "$matches"
-  echo "public quantitative examples must be fixture-generated under docs/generated" >&2
-  exit 1
-fi
+violations = []
+allowed = [
+    re.compile(r"https?://[^\s)]+"),
+    re.compile(r"\b(?:macOS|Rust|schema|release|version|v)\s*v?\d+(?:\.\d+){0,2}(?:-[A-Za-z0-9.-]+)?\b", re.I),
+    re.compile(r"\bApache-\d+\.\d+\b", re.I),
+    re.compile(r"§\d+(?:\.\d+)*"),
+    re.compile(r"\b(?:as of|dated?)\s+\d{4}-\d{2}-\d{2}\b", re.I),
+]
+
+for path in files:
+    generated = False
+    if path.parts[:2] == ("docs", "generated"):
+        continue
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if line.startswith("<!-- BEGIN GENERATED:"):
+            generated = True
+            continue
+        if line.startswith("<!-- END GENERATED:"):
+            generated = False
+            continue
+        if generated:
+            continue
+        remainder = line
+        for pattern in allowed:
+            remainder = pattern.sub("", remainder)
+        if re.search(r"\d", remainder):
+            violations.append(f"{path}:{number}:{line}")
+
+if violations:
+    print("\n".join(violations))
+    print(
+        "public numbers require a narrow version/section/date allowance or an exact generated fragment",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY

@@ -36,4 +36,53 @@ fn generate_empty_scan_document() {
     fs::create_dir_all(output.parent().expect("generated document has a parent"))
         .expect("generated directory must exist");
     fs::write(output, format!("{rendered}\n")).expect("generated document must be written");
+
+    let platforms: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string("ci/platforms.json").expect("platform source must be readable"),
+    )
+    .expect("platform source must be JSON");
+    let mut support = format!(
+        "Release: **{}**\n\nAPI baseline: **{}**\n\n| Hosted lane | Architecture | Evidence status |\n|---|---|---|\n",
+        platforms["release"].as_str().expect("release must be text"),
+        platforms["api_baseline"]
+            .as_str()
+            .expect("API baseline must be text")
+    );
+    for lane in platforms["runtime_lanes"]
+        .as_array()
+        .expect("runtime lanes must be an array")
+    {
+        support.push_str(&format!(
+            "| {} (`{}`) | `{}` | {} |\n",
+            lane["label"].as_str().expect("label must be text"),
+            lane["runner"].as_str().expect("runner must be text"),
+            lane["arch"].as_str().expect("architecture must be text"),
+            if lane["required"] == true {
+                "required"
+            } else {
+                "experimental; non-blocking"
+            }
+        ));
+    }
+    fs::write("docs/generated/support-matrix.md", support).expect("support matrix must be written");
+
+    let capacity = document
+        .payload
+        .capacity
+        .first()
+        .expect("fixture must contain capacity evidence");
+    let fixture_report = match capacity {
+        CapacityValue::Measured { kind, bytes, basis } => format!(
+            "The generated fixture reports `{bytes}` bytes for `{kind:?}` using `{basis:?}`.\n\nIt also reports `{}` structured coverage gap and never derives a global remainder.",
+            document.payload.coverage_gaps.len()
+        ),
+        CapacityValue::Unmeasurable { .. } => {
+            panic!("fixture capacity must be measured")
+        }
+    };
+    fs::write(
+        "docs/generated/fixture-report.md",
+        format!("{fixture_report}\n"),
+    )
+    .expect("fixture report must be written");
 }

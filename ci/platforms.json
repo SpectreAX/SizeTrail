@@ -1,0 +1,56 @@
+{
+  "release": "v0.1.0 technical preview",
+  "api_baseline": "macOS 13 best effort, not runtime-tested in hosted CI",
+  "runtime_lanes": [
+    {
+      "label": "macOS 15 Apple Silicon",
+      "runner": "macos-15",
+      "os": "macOS 15",
+      "arch": "arm64",
+      "required": true,
+      "policy": true,
+      "release_build": true,
+      "benchmark": true
+    },
+    {
+      "label": "macOS 15 Intel",
+      "runner": "macos-15-intel",
+      "os": "macOS 15",
+      "arch": "x86_64",
+      "required": true,
+      "policy": false,
+      "release_build": false,
+      "benchmark": false
+    },
+    {
+      "label": "macOS 26 Apple Silicon",
+      "runner": "macos-26",
+      "os": "macOS 26",
+      "arch": "arm64",
+      "required": true,
+      "policy": false,
+      "release_build": false,
+      "benchmark": false
+    },
+    {
+      "label": "macOS 26 Intel",
+      "runner": "macos-26-intel",
+      "os": "macOS 26",
+      "arch": "x86_64",
+      "required": true,
+      "policy": false,
+      "release_build": false,
+      "benchmark": false
+    },
+    {
+      "label": "Xcode 27 preview on macOS 26 Apple Silicon",
+      "runner": "xcode-27",
+      "os": "macOS 26",
+      "arch": "arm64",
+      "required": false,
+      "policy": false,
+      "release_build": false,
+      "benchmark": false
+    }
+  ]
+}

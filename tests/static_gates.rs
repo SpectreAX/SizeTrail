@@ -370,7 +370,7 @@ fn claim_pattern_gate_rejects_forbidden_program_output() {
 fn quantitative_document_gate_rejects_handwritten_number() {
     let fixture = TempDir::new().expect("documentation fixture must be created");
     fs::create_dir(fixture.path().join("docs")).expect("docs directory must be created");
-    fs::write(fixture.path().join("docs/guide.md"), "Requires macOS 13.\n")
+    fs::write(fixture.path().join("docs/guide.md"), "Observed 87 GB.\n")
         .expect("handwritten number must be written");
 
     assert_rejected(
@@ -380,6 +380,43 @@ fn quantitative_document_gate_rejects_handwritten_number() {
             [] as [&str; 0],
         ),
         "quantitative documentation gate",
+    );
+}
+
+#[test]
+fn quantitative_document_gate_rejects_a_forged_generated_fragment() {
+    let fixture = TempDir::new().expect("fragment fixture must be created");
+    fs::create_dir_all(fixture.path().join("docs/generated"))
+        .expect("generated directory must be created");
+    fs::create_dir(fixture.path().join("scripts")).expect("scripts directory must be created");
+    fs::copy(
+        repository_root().join("scripts/sync-generated-fragments.py"),
+        fixture.path().join("scripts/sync-generated-fragments.py"),
+    )
+    .expect("fragment verifier must be copied");
+    fs::write(
+        fixture.path().join("docs/generated/support-matrix.md"),
+        "verified source\n",
+    )
+    .expect("support fragment must be written");
+    fs::write(
+        fixture.path().join("docs/generated/fixture-report.md"),
+        "verified fixture\n",
+    )
+    .expect("report fragment must be written");
+    fs::write(
+        fixture.path().join("README.md"),
+        "<!-- BEGIN GENERATED: support-matrix -->\nforged 87 GB\n<!-- END GENERATED: support-matrix -->\n<!-- BEGIN GENERATED: fixture-report -->\nverified fixture\n<!-- END GENERATED: fixture-report -->\n",
+    )
+    .expect("forged README must be written");
+
+    assert_rejected(
+        run_script(
+            "check-quantitative-docs.sh",
+            fixture.path(),
+            [] as [&str; 0],
+        ),
+        "generated fragment transclusion gate",
     );
 }
 
