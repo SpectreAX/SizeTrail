@@ -73,6 +73,17 @@ jobs:
       - name: Native release build
         run: cargo build --locked --release
 
+      - name: Report selected simctl wrapper evidence
+        run: |
+          developer_dir="$(xcode-select -p)"
+          simctl_wrapper="$developer_dir/usr/bin/simctl"
+          printf 'developer_dir=%s\n' "$developer_dir"
+          xcodebuild -version
+          file "$simctl_wrapper"
+          shasum -a 256 "$simctl_wrapper"
+          sed -n '1,40p' "$simctl_wrapper"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' /Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/Info.plist
+
       - name: System-call zero-write sandbox
         run: bash scripts/check-zero-write-sandbox.sh target/release/sizetrail
 
