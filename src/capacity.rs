@@ -14,6 +14,10 @@ pub fn measure(root: &Path) -> CapacityReport {
         Ok(root) => root,
         Err(error) => return unknown_report(error.reason()),
     };
+    measure_root(&root)
+}
+
+pub fn measure_root(root: &Root) -> CapacityReport {
     match root.capacity() {
         Ok(values) => CapacityReport {
             status: if values

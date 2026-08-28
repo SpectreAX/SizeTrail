@@ -28,6 +28,7 @@ fn generate_empty_scan_document() {
                 basis: CapacityBasis::AttrVolSpaceUsed,
             }],
         },
+        Vec::new(),
     );
     let rendered = serde_json::to_string_pretty(&document).expect("document must serialize");
     let output = Path::new("docs/generated/empty-scan.json");

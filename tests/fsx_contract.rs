@@ -1,11 +1,15 @@
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
+#[allow(dead_code)]
+mod support;
+
 use std::fs::{self, File};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::Command;
 
 use sizetrail::fsx::{CapacityBasis, CapacityValue, Root};
+use support::ReadOnlyFixture;
 
 fn physical_root(fixture: &tempfile::TempDir) -> std::path::PathBuf {
     fs::canonicalize(fixture.path()).expect("fixture root must have a physical path")
@@ -118,6 +122,67 @@ fn read_only_wrappers_measure_a_fixture_without_changing_it() {
     assert_eq!(before.ino(), after.ino());
     assert_eq!(before.len(), after.len());
     assert_eq!(before.modified().ok(), after.modified().ok());
+}
+
+#[test]
+fn root_lists_children_in_stable_order_without_changing_the_tree() {
+    let fixture = ReadOnlyFixture::create().expect("fixture must be created");
+    let directory = fixture.home.join("Library/Caches/example");
+    std::fs::write(directory.join("z-last"), b"z").expect("fixture file must be created");
+    std::fs::write(directory.join("a-first"), b"a").expect("fixture file must be created");
+    let before = fixture.snapshot().expect("baseline snapshot must succeed");
+    let root = Root::open(&fixture.home).expect("fixture root must initialize");
+
+    let children = root.children(&directory).expect("directory must be listed");
+
+    assert_eq!(
+        children
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect::<Vec<_>>(),
+        ["a-first", "artifact.bin", "z-last"]
+            .map(|name| directory.join(name))
+            .to_vec()
+    );
+    assert_eq!(
+        fixture.snapshot().expect("final snapshot must succeed"),
+        before
+    );
+}
+
+#[test]
+fn root_refuses_to_list_through_an_intermediate_symlink() {
+    let fixture = ReadOnlyFixture::create().expect("fixture must be created");
+    let outside = tempfile::tempdir().expect("outside directory must be created");
+    let link = fixture.home.join("linked");
+    std::os::unix::fs::symlink(outside.path(), &link).expect("symlink must be created");
+    let root = Root::open(&fixture.home).expect("fixture root must initialize");
+
+    assert!(root.children(&link).is_err());
+}
+
+#[test]
+fn exclusion_existence_check_does_not_enter_the_final_path() {
+    let fixture = ReadOnlyFixture::create().expect("fixture must be created");
+    let outside = tempfile::tempdir().expect("outside directory must be created");
+    let link = fixture.home.join("excluded-link");
+    std::os::unix::fs::symlink(outside.path(), &link).expect("symlink must be created");
+    let before = fixture.snapshot().expect("baseline snapshot must succeed");
+    let root = Root::open(&fixture.home).expect("fixture root must initialize");
+
+    assert!(
+        root.path_exists_without_descending(&link)
+            .expect("parent listing must succeed")
+    );
+    assert!(
+        !root
+            .path_exists_without_descending(&fixture.home.join("missing"))
+            .expect("missing name must be reported")
+    );
+    assert_eq!(
+        fixture.snapshot().expect("final snapshot must succeed"),
+        before
+    );
 }
 
 #[test]

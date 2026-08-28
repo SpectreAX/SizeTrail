@@ -20,12 +20,14 @@ fn scan_does_not_change_the_fixture_inside_or_outside_root() {
     let high_value_before = HighValueEntrySnapshot::capture(real_home.as_deref())
         .expect("high-value baseline must succeed");
 
-    cargo_bin_cmd!("sizetrail")
+    let output = cargo_bin_cmd!("sizetrail")
         .args(["scan", "--json", "--root"])
         .arg(&fixture.home)
         .envs(fixture.environment())
-        .assert()
-        .success();
+        .output()
+        .expect("full scan must run");
+    assert!(matches!(output.status.code(), Some(0 | 3)));
+    assert!(serde_json::from_slice::<serde_json::Value>(&output.stdout).is_ok());
 
     let after = fixture.snapshot().expect("final snapshot must succeed");
     let high_value_after = HighValueEntrySnapshot::capture(real_home.as_deref())

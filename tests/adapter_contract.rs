@@ -16,11 +16,14 @@ impl ToolchainAdapter for ContractFixture {
     }
 
     fn inventory(&self, _ctx: &mut PolicyCtx<'_>, _state: &AdapterState) -> Inventory {
-        Inventory
+        Inventory::default()
     }
 
-    fn classify(&self, _inventory: &Inventory) -> Vec<Finding> {
-        Vec::new()
+    fn classify(
+        &self,
+        _inventory: &Inventory,
+    ) -> Result<Vec<Finding>, sizetrail::adapters::InventoryGapReason> {
+        Ok(Vec::new())
     }
 
     fn advise(&self, _finding: &Finding) -> Vec<Advice> {

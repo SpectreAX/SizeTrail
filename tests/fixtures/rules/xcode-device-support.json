@@ -1,0 +1,1 @@
+{"rule_id":"xcode.device_support","mechanism":"user_adjacent","recoverability":"requires_external_device","sensitivity":"medium","expected_path":"~/Library/Developer/Xcode/iOS DeviceSupport/Fixture"}

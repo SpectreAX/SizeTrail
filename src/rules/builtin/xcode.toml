@@ -1,0 +1,72 @@
+[[rule]]
+id = "xcode.derived_data_build"
+adapter = "xcode"
+title = "DerivedData generated build state"
+description = "Build products and indexes generated for an Xcode project."
+paths = [
+  "~/Library/Developer/Xcode/DerivedData/*/Build",
+  "~/Library/Developer/Xcode/DerivedData/*/Index.noindex",
+]
+os = ">=13.0"
+mechanism = "generated"
+recoverability = "rebuild_time_cost"
+sensitivity = "low"
+evidence = "Xcode regenerates these directories during a later build or index, with a time cost."
+fixture_id = "xcode-derived-data-build"
+preconditions = { process_not_running = ["Xcode"] }
+
+[[rule]]
+id = "xcode.archives"
+adapter = "xcode"
+title = "Xcode archives"
+description = "Signed build archives that may be the only retained copy of a shipped build."
+paths = ["~/Library/Developer/Xcode/Archives/*"]
+os = ">=13.0"
+mechanism = "user_owned"
+recoverability = "unrecoverable"
+sensitivity = "high"
+evidence = "An archive can contain unique dSYMs and signed products; no rebuild guarantee exists."
+fixture_id = "xcode-archives"
+preconditions = { process_not_running = [] }
+
+[[rule]]
+id = "xcode.device_support"
+adapter = "xcode"
+title = "iOS DeviceSupport"
+description = "Developer support files associated with device OS versions."
+paths = ["~/Library/Developer/Xcode/iOS DeviceSupport/*"]
+os = ">=13.0"
+mechanism = "user_adjacent"
+recoverability = "requires_external_device"
+sensitivity = "medium"
+evidence = "Xcode may recreate support files only when a compatible physical device is available again."
+fixture_id = "xcode-device-support"
+preconditions = { process_not_running = ["Xcode"] }
+
+[[rule]]
+id = "xcode.simulator_device"
+adapter = "xcode"
+title = "Simulator device data"
+description = "Per-device simulator applications, settings, keychains, and test state."
+paths = ["~/Library/Developer/CoreSimulator/Devices/*"]
+os = ">=13.0"
+mechanism = "user_adjacent"
+recoverability = "unrecoverable"
+sensitivity = "high"
+evidence = "Deleting a simulator device destroys its installed apps and state; simctl is the identity authority."
+fixture_id = "xcode-simulator-device"
+preconditions = { process_not_running = ["Simulator", "Xcode"] }
+
+[[rule]]
+id = "xcode.simulator_runtime"
+adapter = "xcode"
+title = "Simulator runtimes"
+description = "System-managed runtime disk images registered with CoreSimulator."
+paths = ["/Library/Developer/CoreSimulator/Volumes/*"]
+os = ">=13.0"
+mechanism = "vendor_managed"
+recoverability = "redownload_bandwidth"
+sensitivity = "medium"
+evidence = "Apple manages runtime images through Xcode Components and simctl runtime, not direct path deletion."
+fixture_id = "xcode-simulator-runtime"
+preconditions = { process_not_running = ["Simulator", "Xcode"] }

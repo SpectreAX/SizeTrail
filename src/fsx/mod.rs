@@ -107,12 +107,28 @@ pub struct ObjectMeasurements {
     pub dataless: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RootEntryKind {
+    Directory,
+    File,
+    Symlink,
+    Other,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RootEntry {
+    pub path: PathBuf,
+    pub kind: RootEntryKind,
+}
+
 #[derive(Debug)]
 pub struct Root {
     path: PathBuf,
     path_c: CString,
     identity: FileIdentity,
     volume: Option<sys::VolumeRaw>,
+    #[cfg(test)]
+    touched_paths: std::cell::RefCell<Vec<PathBuf>>,
 }
 
 impl Root {
@@ -140,6 +156,8 @@ impl Root {
                 path_c,
                 identity,
                 volume,
+                #[cfg(test)]
+                touched_paths: std::cell::RefCell::new(Vec::new()),
             })
         })
     }
@@ -156,14 +174,9 @@ impl Root {
     }
 
     pub fn measure_object(&self, path: &Path) -> io::Result<ObjectMeasurements> {
-        require_normalized_absolute(path)?;
-        if !path.starts_with(&self.path) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "object is outside the initialized root",
-            ));
-        }
-        let path_c = path_to_c_string(path)?;
+        #[cfg(test)]
+        self.touched_paths.borrow_mut().push(path.to_path_buf());
+        let path_c = self.checked_path(path)?;
         let raw = sys::object(&path_c)?;
         let identity = object_identity(&raw)?;
         enforce_mount_boundary(self.identity, identity)?;
@@ -201,6 +214,87 @@ impl Root {
         })
     }
 
+    pub fn children(&self, path: &Path) -> io::Result<Vec<RootEntry>> {
+        #[cfg(test)]
+        self.touched_paths.borrow_mut().push(path.to_path_buf());
+        let path_c = self.checked_path(path)?;
+        let raw = sys::identity(&path_c)?;
+        enforce_mount_boundary(self.identity, identity(&raw)?)?;
+        if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+            return Err(io::Error::from_raw_os_error(ELOOP));
+        }
+        let mut children = std::fs::read_dir(path)?
+            .map(|entry| {
+                let entry = entry?;
+                let file_type = entry.file_type()?;
+                let kind = if file_type.is_dir() {
+                    RootEntryKind::Directory
+                } else if file_type.is_file() {
+                    RootEntryKind::File
+                } else if file_type.is_symlink() {
+                    RootEntryKind::Symlink
+                } else {
+                    RootEntryKind::Other
+                };
+                Ok(RootEntry {
+                    path: entry.path(),
+                    kind,
+                })
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        children.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(children)
+    }
+
+    pub fn path_exists_without_descending(&self, path: &Path) -> io::Result<bool> {
+        require_normalized_absolute(path)?;
+        let relative = path.strip_prefix(&self.path).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "excluded path is outside the initialized root",
+            )
+        })?;
+        let components = relative
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(name) => Some(name),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if components.is_empty() {
+            return Ok(true);
+        }
+
+        let mut parent = self.path.clone();
+        for (index, name) in components.iter().enumerate() {
+            let path_c = self.checked_path(&parent)?;
+            let raw = sys::identity(&path_c)?;
+            enforce_mount_boundary(self.identity, identity(&raw)?)?;
+            if std::fs::symlink_metadata(&parent)?.file_type().is_symlink() {
+                return Err(io::Error::from_raw_os_error(ELOOP));
+            }
+            let mut found = false;
+            for entry in std::fs::read_dir(&parent)? {
+                if entry?.file_name() == **name {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return Ok(false);
+            }
+            if index + 1 != components.len() {
+                parent.push(name);
+            }
+        }
+        Ok(true)
+    }
+
+    #[cfg(test)]
+    pub fn test_touched_paths(&self) -> Vec<PathBuf> {
+        self.touched_paths.borrow().clone()
+    }
+
     pub fn capacity(&self) -> io::Result<Vec<CapacityValue>> {
         let fallback = sys::filesystem(&self.path_c)?;
         let important = sys::important_capacity(&self.path_c);
@@ -211,6 +305,17 @@ impl Root {
             important,
             opportunistic,
         ))
+    }
+
+    fn checked_path(&self, path: &Path) -> io::Result<CString> {
+        require_normalized_absolute(path)?;
+        if !path.starts_with(&self.path) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "object is outside the initialized root",
+            ));
+        }
+        path_to_c_string(path)
     }
 }
 

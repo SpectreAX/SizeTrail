@@ -1,0 +1,1 @@
+{"rule_id":"xcode.simulator_runtime","mechanism":"vendor_managed","recoverability":"redownload_bandwidth","sensitivity":"medium","expected_path":"/Library/Developer/CoreSimulator/Volumes/iOS_21E213/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 17.4.simruntime"}

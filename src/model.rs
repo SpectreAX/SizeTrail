@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Component, Path};
 use std::time::{SystemTime, SystemTimeError, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -7,6 +7,74 @@ use serde::Serialize;
 use crate::fsx::CapacityValue;
 
 pub const SCHEMA_VERSION: &str = "0.1.0-unstable";
+pub const FINDING_ID_VERSION: &str = "f1";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FindingIdError {
+    InvalidAdapterId,
+    InvalidRuleId,
+    InvalidNormalizedPath,
+}
+
+pub fn normalized_report_path(home: &Path, path: &Path) -> Result<String, FindingIdError> {
+    if !is_normalized_absolute(home) || !is_normalized_absolute(path) {
+        return Err(FindingIdError::InvalidNormalizedPath);
+    }
+    if let Ok(relative) = path.strip_prefix(home) {
+        let relative = relative.to_string_lossy();
+        return Ok(if relative.is_empty() {
+            "~".to_owned()
+        } else {
+            format!("~/{relative}")
+        });
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
+pub fn finding_id(
+    adapter_id: &str,
+    rule_id: &str,
+    normalized_path: &str,
+) -> Result<String, FindingIdError> {
+    if !valid_id(adapter_id) || adapter_id.contains(':') {
+        return Err(FindingIdError::InvalidAdapterId);
+    }
+    if !valid_id(rule_id) {
+        return Err(FindingIdError::InvalidRuleId);
+    }
+    if !(normalized_path == "~"
+        || normalized_path.starts_with("~/")
+        || normalized_path.starts_with('/'))
+        || normalized_path
+            .split('/')
+            .any(|component| matches!(component, "." | ".."))
+    {
+        return Err(FindingIdError::InvalidNormalizedPath);
+    }
+
+    let mut digest = 0xcbf2_9ce4_8422_2325_u64;
+    for component in [adapter_id, rule_id, normalized_path] {
+        for byte in component.bytes().chain([0]) {
+            digest ^= u64::from(byte);
+            digest = digest.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    Ok(format!("{FINDING_ID_VERSION}:{adapter_id}:{digest:016x}"))
+}
+
+fn valid_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._-".contains(&byte)
+        })
+}
+
+fn is_normalized_absolute(path: &Path) -> bool {
+    path.is_absolute()
+        && !path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
+}
 
 #[derive(Debug, Serialize)]
 pub struct ScanDocument {
@@ -53,6 +121,8 @@ pub struct ScanPayload {
 pub struct RegionReport {
     pub id: String,
     pub status: RegionStatus,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -69,8 +139,104 @@ pub struct Finding {
     pub id: String,
     pub adapter_id: String,
     pub rule_id: String,
+    pub title: String,
+    pub summary: String,
     pub normalized_path: String,
+    pub mechanism: String,
+    pub recoverability: String,
+    pub sensitivity: String,
+    pub evidence: String,
+    pub unexplained_private_gap: bool,
     pub measurements: Vec<Measurement>,
+    pub observations: Vec<SignalObservation>,
+    pub advice: Vec<Advice>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservationKind {
+    Direct,
+    Derived,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservationRelation {
+    TestedWidthCorrelate,
+    PossibleWidthExplanation,
+    LogicalAllocationGap,
+    ReclaimPolicy,
+    DeletionScope,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignalId {
+    FilesystemCompressed,
+    ResourceForkAllocated,
+    MayShareBlocks,
+    VolumeHasSnapshots,
+    Sparse,
+    Purgeable,
+    MultipleHardlinks,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservationScope {
+    Object,
+    Inode,
+    Volume,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct SignalObservation {
+    pub observation: ObservationKind,
+    pub signal: SignalId,
+    pub relation: ObservationRelation,
+    pub scope: ObservationScope,
+}
+
+pub fn normalize_findings(findings: &mut [Finding]) {
+    for finding in findings.iter_mut() {
+        finding.observations.sort_by_key(|observation| {
+            (observation.relation, observation.signal, observation.scope)
+        });
+        finding.observations.dedup();
+        finding.summary = finding.observations.first().map_or_else(
+            || "no allocation signal observed".to_owned(),
+            signal_summary,
+        );
+    }
+    findings.sort_by(|left, right| {
+        observation_key(left)
+            .cmp(&observation_key(right))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+}
+
+fn observation_key(finding: &Finding) -> (bool, Option<&SignalObservation>) {
+    (
+        finding.observations.is_empty(),
+        finding.observations.first(),
+    )
+}
+
+fn signal_summary(observation: &SignalObservation) -> String {
+    match observation.signal {
+        SignalId::FilesystemCompressed => {
+            "compressed storage makes the private floor uninformative"
+        }
+        SignalId::ResourceForkAllocated => {
+            "resource-fork allocation is correlated with private-floor uncertainty"
+        }
+        SignalId::MayShareBlocks => "clone sharing may contribute to allocation uncertainty",
+        SignalId::VolumeHasSnapshots => "volume snapshots may contribute to allocation uncertainty",
+        SignalId::Sparse => "sparse allocation explains part of the logical-size gap",
+        SignalId::Purgeable => "the filesystem marks some content as purgeable",
+        SignalId::MultipleHardlinks => "multiple hardlinks widen the deletion scope",
+    }
+    .to_owned()
 }
 
 #[derive(Debug, Serialize)]
@@ -102,7 +268,7 @@ pub enum AdviceImpact {
     Destructive,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Measurement {
     pub plane: MeasurementPlane,
     pub basis: MeasurementBasis,
@@ -111,7 +277,7 @@ pub struct Measurement {
     pub value: MeasurementValue,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MeasurementPlane {
     Capacity,
@@ -119,7 +285,7 @@ pub enum MeasurementPlane {
     DispositionEstimate,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MeasurementBasis {
     LogicalSize,
@@ -127,15 +293,16 @@ pub enum MeasurementBasis {
     PrivateSize,
     VolumeSpaceUsed,
     VendorReported,
+    PrivateFloorAllocatedCeiling,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct MeasurementScope {
     pub kind: MeasurementScopeKind,
     pub id: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MeasurementScopeKind {
     Container,
@@ -144,13 +311,13 @@ pub enum MeasurementScopeKind {
     ObjectSet,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct MeasurementCoverage {
     pub status: MeasurementCoverageStatus,
     pub gap_ids: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MeasurementCoverageStatus {
     Complete,
@@ -158,7 +325,7 @@ pub enum MeasurementCoverageStatus {
     Unmeasurable,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MeasurementValue {
     ExactBytes {
@@ -167,17 +334,30 @@ pub enum MeasurementValue {
     IntervalBytes {
         floor_bytes: u64,
         ceiling_bytes: Option<u64>,
+        applicable_action: DispositionAction,
     },
     Unmeasurable,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DispositionAction {
+    PermanentUnlinkAfterReferencesClose,
+}
+
 #[derive(Debug, Serialize)]
 pub struct CoverageGap {
-    pub id: &'static str,
+    pub id: String,
     pub plane: MeasurementPlane,
-    pub region: &'static str,
+    pub region: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     pub status: RegionStatus,
     pub reason: CoverageGapReason,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub errno: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -185,6 +365,19 @@ pub struct CoverageGap {
 pub enum CoverageGapReason {
     NoAdaptersCompiled,
     RootUnmeasurable,
+    AbsentOrChanged,
+    AccessDenied,
+    PolicyDeniedUnknown,
+    UnknownVersion,
+    NotReady,
+    Disabled,
+    ProbeFailed,
+    TraversalFailed,
+    InvalidToolOutput,
+    RuntimeSizeUnavailable,
+    TimedOut,
+    RuleSetInvalid,
+    ExcludedByUser,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

@@ -2,16 +2,19 @@
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use serde_json::Value;
+use sizetrail::capacity::CapacityReport;
 use sizetrail::model::{
-    Measurement, MeasurementBasis, MeasurementCoverage, MeasurementCoverageStatus,
-    MeasurementPlane, MeasurementScope, MeasurementScopeKind, MeasurementValue,
+    CoverageGap, CoverageGapReason, DispositionAction, EnvironmentEnvelope, Measurement,
+    MeasurementBasis, MeasurementCoverage, MeasurementCoverageStatus, MeasurementPlane,
+    MeasurementScope, MeasurementScopeKind, MeasurementValue, RegionStatus,
 };
+use sizetrail::scan::{AdapterReport, scan};
 
 #[test]
-fn adapter_free_scan_emits_a_complete_json_document() {
+fn explicitly_excluded_adapter_scan_emits_a_complete_json_document() {
     let fixture = tempfile::tempdir().expect("scan root must be created");
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--root"])
+        .args(["scan", "--json", "--no-xcode", "--root"])
         .arg(fixture.path())
         .output()
         .expect("scan must run");
@@ -25,10 +28,106 @@ fn adapter_free_scan_emits_a_complete_json_document() {
     assert_eq!(document["payload"]["regions"][0]["id"], "capacity");
     assert!(document["payload"]["capacity"].is_array());
     assert_eq!(document["payload"]["findings"], serde_json::json!([]));
+    assert_eq!(document["payload"]["regions"][1]["id"], "xcode");
     assert_eq!(
-        document["payload"]["coverage_gaps"][0]["reason"],
-        "no_adapters_compiled"
+        document["payload"]["regions"][1]["status"],
+        "excluded_by_user"
     );
+}
+
+#[test]
+fn adapter_arrival_order_does_not_change_the_payload() {
+    fn report(id: &str) -> AdapterReport {
+        AdapterReport {
+            id: id.to_owned(),
+            status: RegionStatus::NotPresent,
+            tool_version: None,
+            warnings: Vec::new(),
+            findings: Vec::new(),
+            coverage_gaps: Vec::new(),
+        }
+    }
+    let environment = EnvironmentEnvelope {
+        generated_at_unix_seconds: 1_800_000_000,
+        hostname: "fixture-host".to_owned(),
+        home: "/Users/fixture".to_owned(),
+        tool_versions: Default::default(),
+    };
+    let capacity = CapacityReport {
+        status: RegionStatus::Complete,
+        values: Vec::new(),
+    };
+    let first = scan(
+        environment,
+        CapacityReport {
+            status: capacity.status,
+            values: Vec::new(),
+        },
+        vec![report("z-last"), report("a-first")],
+    );
+    let second = scan(
+        EnvironmentEnvelope {
+            generated_at_unix_seconds: 1_800_000_000,
+            hostname: "fixture-host".to_owned(),
+            home: "/Users/fixture".to_owned(),
+            tool_versions: Default::default(),
+        },
+        capacity,
+        vec![report("a-first"), report("z-last")],
+    );
+
+    assert_eq!(
+        serde_json::to_vec(&first.payload).expect("payload must serialize"),
+        serde_json::to_vec(&second.payload).expect("payload must serialize")
+    );
+}
+
+#[test]
+fn adapter_failure_and_user_exclusion_remain_distinct_document_states() {
+    let failed = AdapterReport {
+        id: "xcode".to_owned(),
+        status: RegionStatus::Unmeasurable,
+        tool_version: Some("Fixture".to_owned()),
+        warnings: vec!["fixture warning".to_owned()],
+        findings: Vec::new(),
+        coverage_gaps: vec![CoverageGap {
+            id: "xcode.simctl.timeout".to_owned(),
+            plane: MeasurementPlane::ToolchainAttribution,
+            region: "xcode".to_owned(),
+            path: None,
+            status: RegionStatus::Unmeasurable,
+            reason: CoverageGapReason::TimedOut,
+            stage: Some("simctl_devices".to_owned()),
+            errno: None,
+        }],
+    };
+    let excluded = AdapterReport {
+        id: "homebrew".to_owned(),
+        status: RegionStatus::ExcludedByUser,
+        tool_version: None,
+        warnings: Vec::new(),
+        findings: Vec::new(),
+        coverage_gaps: Vec::new(),
+    };
+    let document = scan(
+        EnvironmentEnvelope {
+            generated_at_unix_seconds: 1_800_000_000,
+            hostname: "fixture-host".to_owned(),
+            home: "/Users/fixture".to_owned(),
+            tool_versions: Default::default(),
+        },
+        CapacityReport {
+            status: RegionStatus::Complete,
+            values: Vec::new(),
+        },
+        vec![excluded, failed],
+    );
+
+    let json = serde_json::to_value(&document).expect("document must serialize");
+    assert_eq!(json["payload"]["regions"][1]["id"], "homebrew");
+    assert_eq!(json["payload"]["regions"][1]["status"], "excluded_by_user");
+    assert_eq!(json["payload"]["regions"][2]["id"], "xcode");
+    assert_eq!(json["payload"]["coverage_gaps"][0]["reason"], "timed_out");
 }
 
 #[test]
@@ -68,6 +167,7 @@ fn measurement_schema_makes_basis_scope_coverage_and_uncertainty_explicit() {
         value: MeasurementValue::IntervalBytes {
             floor_bytes: 0,
             ceiling_bytes: Some(1024),
+            applicable_action: DispositionAction::PermanentUnlinkAfterReferencesClose,
         },
     };
     let serialized = serde_json::to_value(measurement).expect("measurement must serialize");
@@ -76,4 +176,8 @@ fn measurement_schema_makes_basis_scope_coverage_and_uncertainty_explicit() {
     assert_eq!(serialized["scope"]["kind"], "toolchain_store");
     assert_eq!(serialized["coverage"]["status"], "complete");
     assert_eq!(serialized["value"]["kind"], "interval_bytes");
+    assert_eq!(
+        serialized["value"]["applicable_action"],
+        "permanent_unlink_after_references_close"
+    );
 }

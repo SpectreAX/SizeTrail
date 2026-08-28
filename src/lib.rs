@@ -11,4 +11,5 @@ pub mod capacity;
 pub mod fsx;
 pub mod model;
 pub mod policy;
+pub mod rules;
 pub mod scan;

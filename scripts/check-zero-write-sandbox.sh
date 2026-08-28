@@ -97,7 +97,7 @@ set +e
 scan_status=$?
 set -e
 
-if [[ $scan_status -ne 0 ]]; then
+if [[ $scan_status -ne 0 && $scan_status -ne 3 ]]; then
   echo "scan exited $scan_status under the deny-write sandbox" >&2
   cat "$probe_root/scan.stderr" >&2
   exit 1
@@ -108,7 +108,7 @@ grep -q '"schema_version":"0.1.0-unstable"' "$probe_root/scan.json"
 # A gate that only proves "nothing failed" is not a gate (§9.0). Assert the measurement
 # actually ran: a regression that makes root initialization fail everywhere would otherwise
 # keep this check green while proving nothing about the read path.
-if ! grep -q '"regions":\[{"id":"capacity","status":"complete"}\]' "$probe_root/scan.json"; then
+if ! grep -q '"id":"capacity","status":"complete"' "$probe_root/scan.json"; then
   echo "scan produced no completed capacity measurement under the sandbox" >&2
   cat "$probe_root/scan.json" >&2
   exit 1

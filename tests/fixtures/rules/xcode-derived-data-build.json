@@ -1,0 +1,1 @@
+{"rule_id":"xcode.derived_data_build","mechanism":"generated","recoverability":"rebuild_time_cost","sensitivity":"low","expected_path":"~/Library/Developer/Xcode/DerivedData/App/Build"}
