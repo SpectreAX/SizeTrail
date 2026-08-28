@@ -858,6 +858,34 @@ JSON interval 必须携带 `applicable_action = permanent_unlink_after_reference
 
 ---
 
+## Q42 — 零写 sandbox 与外部工具副作用分开取证
+
+**决策：零写 Seatbelt 门禁只验证 SizeTrail 进程自身，在该门禁中以
+`SIZETRAIL_NO_XCODE_PROBE=1` 关闭 registry 外部命令；外部工具副作用由 registry、
+调用上限、关闭开关与独立 hosted 行为测试负责。** 这不是跳过测量：sandbox 文档仍须
+包含 complete capacity region，负向变异仍须证明任意直接写尝试会被 unified log 捕获。
+
+P4 首次完整 hosted scan 实测发现，两条 `xcrun simctl list --json ...` 即使语义上只读，
+`xcrun` 仍会尝试在 Darwin user temp directory（hosted 上为 `/private/var/folders/.../T`，
+不等同于脚本重定向的 `TMPDIR`）创建或刷新 `xcrun_db-*` resolver cache、访问 controlling tty，
+并可能启动或连接 CoreSimulatorService / simdiskimaged。Seatbelt 会继承到 child；若让
+这些 probe 留在同一门禁里，就无法区分“SizeTrail 自身写”与“已登记外部工具的已知
+副作用”。
+
+每条 simctl registry 项须公开以上 typed `known_side_effects`。完整测试仍在真实 hosted
+Xcode 上运行生产 probe，调用次数与 timeout 继续被 registry 约束；这里只把两种证据的
+归属拆开，不删除任何证据。policy 必须清除继承的 `xcrun_db` 与 `xcrun_nocache`：前者可把
+cache 写重定向至用户指定路径，后者会强制 refresh；`xcrun` 没有已验证的无写 cache 开关。
+
+被否：允许 Darwin user temp directory 中的 `xcrun_db-*` 或 `/dev/tty` 写入 Seatbelt profile（会同时给 SizeTrail
+自身开放同一路径）；把外部工具写尝试描述为 SizeTrail 自身写；为追求全绿而删除 full
+scan 或 sandbox；继续声称 read-only vendor subcommand 等于零 write syscall。
+
+影响：Q11 的安全声明明确为 SizeTrail 进程自身；`SPEC.md` §8.1、§8.2、§10.4、§12.1；
+side-effect registry 与 `doctor` JSON。
+
+---
+
 ## 附录 A — 实测环境基线
 
 采集于 2026-08-26，作为规则表量级参考与回归基线：
