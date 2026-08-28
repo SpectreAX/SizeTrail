@@ -16,13 +16,24 @@ env:
   MACOSX_DEPLOYMENT_TARGET: "13.0"
 
 jobs:
+  matrix:
+    name: Define verified-platform matrix
+    runs-on: ubuntu-latest
+    outputs:
+      runtime: ${{ steps.platforms.outputs.runtime }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: platforms
+        run: echo "runtime=$(jq -c '{include:.runtime_lanes}' ci/platforms.json)" >> "$GITHUB_OUTPUT"
+
   test:
-    name: macOS ${{ matrix.macos }} arm64
-    runs-on: macos-${{ matrix.macos }}
+    name: ${{ matrix.label }}
+    needs: matrix
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ !matrix.required }}
     strategy:
       fail-fast: false
-      matrix:
-        macos: [15, 26]
+      matrix: ${{ fromJSON(needs.matrix.outputs.runtime) }}
 
     steps:
       - uses: actions/checkout@v5
@@ -53,33 +64,50 @@ jobs:
       - name: Tests
         run: cargo test --locked --all -- --nocapture
 
-      - name: Fixture-generated quantitative documentation
+      - name: Fixture-generated public documentation
         run: |
           cargo test --locked --test generate_docs -- --ignored
           bash scripts/check-quantitative-docs.sh
           bash scripts/check-generated-docs.sh
 
-      - name: Build both supported architectures
+      - name: Native release build
+        run: cargo build --locked --release
+
+      - name: System-call zero-write sandbox
+        run: bash scripts/check-zero-write-sandbox.sh target/release/sizetrail
+
+      - name: Build release architectures
+        if: matrix.release_build
         run: |
           cargo build --locked --release --target aarch64-apple-darwin
           cargo build --locked --release --target x86_64-apple-darwin
 
       - name: Mach-O minimum macOS gate
+        if: matrix.release_build
         run: |
           bash scripts/check-minimum-macos.sh target/aarch64-apple-darwin/release/sizetrail arm64
           bash scripts/check-minimum-macos.sh target/x86_64-apple-darwin/release/sizetrail x86_64
 
-      - name: System-call zero-write sandbox
-        run: bash scripts/check-zero-write-sandbox.sh target/aarch64-apple-darwin/release/sizetrail
+      - name: Record Xcode fixture benchmark
+        if: matrix.benchmark
+        run: bash scripts/benchmark-xcode-fixture.sh
+
+      - name: Publish Xcode fixture benchmark
+        if: matrix.benchmark
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcode-fixture-benchmark-${{ matrix.runner }}
+          path: artifacts/xcode-fixture-benchmark.json
+          if-no-files-found: error
 
       - name: Install dependency policy tools
-        if: matrix.macos == 15
+        if: matrix.policy
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny@0.20.2,cargo-audit@0.22.2
 
       - name: Dependency policy
-        if: matrix.macos == 15
+        if: matrix.policy
         run: |
           cargo deny --locked check
           cargo audit --file Cargo.lock

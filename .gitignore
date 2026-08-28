@@ -1,5 +1,7 @@
 # Rust
 /target/
+/artifacts/
+/dist/
 **/*.rs.bk
 
 # Cargo.lock 不忽略：本仓库产出二进制，锁文件须随仓库以保证可复现构建。

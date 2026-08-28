@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Annotated tag whose commit already has a green required CI matrix
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+jobs:
+  release:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Verify annotated tag and package version
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          git cat-file -t "$RELEASE_TAG" | grep -qx tag
+          test "v$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[0].version')" = "$RELEASE_TAG"
+
+      - name: Re-run locked release tests
+        run: cargo test --locked --all
+
+      - name: Build both architectures
+        run: |
+          cargo build --locked --release --target aarch64-apple-darwin
+          cargo build --locked --release --target x86_64-apple-darwin
+          bash scripts/check-minimum-macos.sh target/aarch64-apple-darwin/release/sizetrail arm64
+          bash scripts/check-minimum-macos.sh target/x86_64-apple-darwin/release/sizetrail x86_64
+
+      - name: Package checksummed assets
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          mkdir -p dist
+          cp target/aarch64-apple-darwin/release/sizetrail dist/sizetrail
+          tar -C dist -czf "dist/sizetrail-${RELEASE_TAG}-aarch64-apple-darwin.tar.gz" sizetrail
+          cp target/x86_64-apple-darwin/release/sizetrail dist/sizetrail
+          tar -C dist -czf "dist/sizetrail-${RELEASE_TAG}-x86_64-apple-darwin.tar.gz" sizetrail
+          rm dist/sizetrail
+          (cd dist && shasum -a 256 sizetrail-*.tar.gz > SHA256SUMS)
+
+      - name: Record release benchmark
+        run: bash scripts/benchmark-xcode-fixture.sh
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            dist/*.tar.gz dist/SHA256SUMS artifacts/xcode-fixture-benchmark.json \
+            --verify-tag --generate-notes --title "SizeTrail ${RELEASE_TAG} technical preview"
