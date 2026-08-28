@@ -514,7 +514,7 @@ enum Advice {
 
 1. 整个 crate 不存在 `fs::write`、`fs::remove_*`、`fs::rename`、`File::create`、`OpenOptions::write/append/create`。唯一输出是 stdout / stderr。`src/lib.rs` 与 `src/main.rs` 两个独立 crate root 必须以 `forbid(clippy::disallowed_methods)` 锁死该约束；`disallowed_types` 与 `unsafe_code` 因各有唯一合法豁免点，保持 `deny` 并由边界脚本限制豁免位置。非测试代码没有合法 `unwrap()` 豁免，故两根同时 `forbid(clippy::unwrap_used)`。
 2. 无操作日志文件、无缓存文件、无配置文件、无 `completion` 写盘（Q17 / Q20 / Q22）。
-3. **可机械验证的安全属性：正常运行不向用户或系统数据路径发起任何写操作。** CI 静态 API 门禁 + 重定向写入位置环境变量的运行时快照 + macOS 15/26 上 `sandbox-exec` 的 `(deny file-write*)` 系统调用级强制，共同验证 §10.2 第 1、2 条。唯一例外是 dyld 注册 DOF 时对字符设备 `/dev/dtracehelper` 的 `file-write-data`（Q34）；profile 以 literal path + exact operation 窄允许，其他写继续全部拒绝。deny 规则必须携带每次运行唯一的 message token，并由 unified log 实时观察器断言 scan token 的其他违规记录为零；仅断言 scan 成功或文件未出现不够，因为产品可能吞掉 `EPERM`。START/END 必拒哨兵分别证明观察器已接通、事件已排空，并必须在同一事件中同时匹配 token、`file-write-create` 与精确目标路径。sandbox 门禁必须 fail closed；若目标 runner 不再支持该 deprecated 机制，必须先通过 decision record 重定证据或收窄声明，不得静默删除门禁。该证据不覆盖 sandbox 前已打开的额外 fd，也不覆盖 IPC 请求未沙箱化 daemon 改状态。
+3. **可机械验证的安全属性：SizeTrail 进程自身正常运行不向用户或系统数据路径发起任何写操作。** CI 静态 API 门禁 + 重定向写入位置环境变量的运行时快照 + macOS 15/26 上 `sandbox-exec` 的 `(deny file-write*)` 系统调用级强制，共同验证 §10.2 第 1、2 条。唯一例外是 dyld 注册 DOF 时对字符设备 `/dev/dtracehelper` 的 `file-write-data`（Q34）；profile 以 literal path + exact operation 窄允许，其他写继续全部拒绝。deny 规则必须携带每次运行唯一的 message token，并由 unified log 实时观察器断言 scan token 的其他违规记录为零；仅断言 scan 成功或文件未出现不够，因为产品可能吞掉 `EPERM`。START/END 必拒哨兵分别证明观察器已接通、事件已排空，并必须在同一事件中同时匹配 token、`file-write-create` 与精确目标路径。sandbox 门禁必须 fail closed；若目标 runner 不再支持该 deprecated 机制，必须先通过 decision record 重定证据或收窄声明，不得静默删除门禁。该门禁以 `SIZETRAIL_NO_XCODE_PROBE=1` 关闭外部命令，使继承 Seatbelt 的 vendor child 不与产品进程混算；同时仍断言 capacity complete，故不能以关闭 probe 跳过产品测量。外部工具继续由 §8.2 的 registry 与真实 hosted full-scan 测试取证。该证据不覆盖 sandbox 前已打开的额外 fd，也不覆盖外部 child 或 IPC 请求未沙箱化 daemon 改状态。
 4. **`src/fsx/sys.rs` 是唯一 unsafe 豁免点。** 该模块只导出只读系统调用包装，公开签名不得暴露可写句柄、可变缓冲区、写入 flag 或执行任意系统调用的能力；其他文件不得抑制 `unsafe_code` lint。所有系统调用返回值与 `errno` 必须检查并向上返回，禁止用 `let _ =` 或等价形式丢弃可能表示写尝试或调用失败的结果。两个 crate root 以 `forbid(clippy::let_underscore_must_use, clippy::let_underscore_untyped)` 机械拦截 `let _ = Result` 与未标类型的 raw status；这些 lint **不能**识别写语义，也拦不住显式类型的 raw integer 或裸调用，故只作为契约的局部机械化，不能替代代码审查与运行时证据。模块内部无法由 Clippy 的 Rust API 禁用表证明零写，**其零写保证明确且仅由 §10.2 第 1 条运行时 harness 覆盖**。P1.1 只建立此边界，不实现 `getattrlist`。
 5. 当前 crate **没有 `build.rs`**。build script 是独立 crate；未来若引入，必须同样设置 `forbid(clippy::disallowed_methods)`，纳入 lint suppression 边界与系统调用级零写测试。未同时补齐这些控制前，禁止新增 `build.rs`。
 
@@ -531,7 +531,16 @@ enum Advice {
 | 外部命令写状态 | 闭集白名单，每条命令单独审计并记录其只读性依据 |
 | CoreSimulatorService 启动 | 裸命令不自动探测；只在显式子命令下发起（Q22） |
 
-**side-effect registry（Q17）：** 记录每个 probe 每次扫描的**最大调用次数**、关闭开关及硬 timeout。registry 是数据，测试断言实际调用次数不超过声明值；timeout 必须终止并回收子进程，且映射为 typed `unmeasurable`，不能令完整 JSON 缺失。
+**side-effect registry（Q17）：** 记录每个 probe 每次扫描的**最大调用次数**、关闭开关、
+硬 timeout 与已知副作用。registry 是数据，测试断言实际调用次数不超过声明值；timeout
+必须终止并回收子进程，且映射为 typed `unmeasurable`，不能令完整 JSON 缺失。
+P4 hosted 实测两条 `xcrun simctl list --json ...` 会尝试在 Darwin user temp directory
+（hosted 上为 `/private/var/folders/.../T`，不是脚本重定向的 `TMPDIR`）创建或刷新
+`xcrun_db-*` resolver cache、访问 controlling tty，并可能启动/连接 CoreSimulator daemon；
+这些必须进入 `doctor` JSON，
+不能把“vendor subcommand 语义只读”偷换成“child 没有 write syscall”。
+policy 清除 `xcrun_db` 与 `xcrun_nocache`，防止继承环境把 cache 写重定向到用户路径或
+强制刷新；不存在已验证的 xcrun 无写 cache 开关。
 
 ### 8.3 明令禁止
 
@@ -665,7 +674,8 @@ hosted lane 的临时普通用户账户与维护者普通用户账户上共同�
 5. 有本地快照的机器上 — 实测 `fs_snapshot_list` 正例，并与强制 snapshot=true 的
    分类 fixture 共同断言 typed signal 与区间表述；**不得把这两段组合证据描述成
    hosted end-to-end 正例，也不得虚构具体快照归因**
-6. required hosted lane 全程运行 deny-write Seatbelt 门禁；fixture 同时运行
+6. required hosted lane 对关闭 registry 外部 probe 的 SizeTrail 进程运行 deny-write
+   Seatbelt 门禁；真实 full scan 另行验证 registry 命令与已知副作用。fixture 同时运行
    TreeSnapshot 与高价值真实路径兜底。两者只覆盖调用进程，未沙箱化 daemon 的空格
    继续留在 §12.1
 
@@ -787,8 +797,8 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | `/usr/bin/xcode-select -p` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 生产 probe 测试实际执行；只判 selection，标准 CLT → `not_present` |
 | `/usr/bin/xcodebuild -version` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 仅 selection 为完整 Xcode 候选后运行；固定 locale/清除重定向环境；未知版本降级 |
 | `/usr/bin/xcodebuild -checkFirstLaunchStatus` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 仅已验证版本运行；非零为 `not_ready`，绝不调用写入型 `-runFirstLaunch` / `-license accept` |
-| `/usr/bin/xcrun simctl list --json devices` | `Command` 仅 policy | — | 是（直接 child，不覆盖 daemon） | 是，max 1、30s | 仅 Ready 后运行；退出 0 + 完整 JSON；UUID/dataPath 后缀验证；完整 Devices exclude 时调用为 0 |
-| `/usr/bin/xcrun simctl list --json runtimes` | `Command` 仅 policy | — | 是（直接 child，不覆盖 daemon） | 是，max 1、30s | 仅 Ready 后运行；runtime identity 校验；大小无 vendor 口径时 typed unmeasurable，不 raw delete |
+| `/usr/bin/xcrun simctl list --json devices` | `Command` 仅 policy | — | 产品 sandbox 中关闭 | 是，max 1、30s | 仅 Ready 后运行；退出 0 + 完整 JSON；UUID/dataPath 后缀验证；完整 Devices exclude 时调用为 0；known effects 包含 xcrun Darwin user temp directory/tty 与 CoreSimulator service |
+| `/usr/bin/xcrun simctl list --json runtimes` | `Command` 仅 policy | — | 产品 sandbox 中关闭 | 是，max 1、30s | 仅 Ready 后运行；runtime identity 校验；大小无 vendor 口径时 typed unmeasurable，不 raw delete；known effects 同上 |
 | child stdout/stderr 与进程生命周期 | `Command` 仅 policy | — | 完整 scan sandbox 覆盖调用进程 | 是 | 固定输出由 policy 并行排空；registry 硬 timeout 会终止并回收子进程，单测断言 typed `timed_out` 与调用计数 |
 | `simctl` 诱发 CoreSimulatorService / simdiskimaged 状态变化 | — | — | 不覆盖 daemon | 是（只限制调用次数） | 已知读副作用；无自动重试、不 pkill daemon、可由 `SIZETRAIL_NO_XCODE_PROBE` 关闭；daemon 自身写 **未覆盖** |
 | 内置 TOML 规则解析 | 无外置 rules path；`include_str!` 编入 | — | scan sandbox 覆盖依赖运行路径 | — | schema `deny_unknown_fields`、无 command 字段、每条 rule + fixture 分类断言；toml crate 未执行路径仍不作全局保证 |

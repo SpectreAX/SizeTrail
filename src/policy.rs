@@ -26,6 +26,7 @@ pub struct ProbePolicy {
     pub id: ProbeId,
     pub max_calls_per_scan: usize,
     pub disable_env: &'static str,
+    pub known_side_effects: &'static [&'static str],
     pub command: ReadOnlyCommand,
 }
 
@@ -50,8 +51,15 @@ const XCODE_REMOVED_ENVIRONMENT: &[&str] = &[
     "SDKROOT",
     "TOOLCHAINS",
     "xcrun_cache",
+    "xcrun_db",
+    "xcrun_nocache",
     "xcrun_log",
     "xcrun_verbose",
+];
+const SIMCTL_SIDE_EFFECTS: &[&str] = &[
+    "xcrun_may_create_or_refresh_resolver_cache_in_darwin_user_temp_dir",
+    "xcrun_may_access_the_controlling_terminal",
+    "simctl_may_start_or_connect_coresimulator_services",
 ];
 
 pub const SIDE_EFFECT_REGISTRY: &[ProbePolicy] = &[
@@ -59,6 +67,7 @@ pub const SIDE_EFFECT_REGISTRY: &[ProbePolicy] = &[
         id: XCODE_SELECT_DEVELOPER_DIR,
         max_calls_per_scan: 1,
         disable_env: "SIZETRAIL_NO_XCODE_PROBE",
+        known_side_effects: &[],
         command: ReadOnlyCommand {
             program: "/usr/bin/xcode-select",
             arguments: &["-p"],
@@ -71,6 +80,7 @@ pub const SIDE_EFFECT_REGISTRY: &[ProbePolicy] = &[
         id: XCODE_XCODEBUILD_VERSION,
         max_calls_per_scan: 1,
         disable_env: "SIZETRAIL_NO_XCODE_PROBE",
+        known_side_effects: &[],
         command: ReadOnlyCommand {
             program: "/usr/bin/xcodebuild",
             arguments: &["-version"],
@@ -83,6 +93,7 @@ pub const SIDE_EFFECT_REGISTRY: &[ProbePolicy] = &[
         id: XCODE_FIRST_LAUNCH_STATUS,
         max_calls_per_scan: 1,
         disable_env: "SIZETRAIL_NO_XCODE_PROBE",
+        known_side_effects: &[],
         command: ReadOnlyCommand {
             program: "/usr/bin/xcodebuild",
             arguments: &["-checkFirstLaunchStatus"],
@@ -95,6 +106,7 @@ pub const SIDE_EFFECT_REGISTRY: &[ProbePolicy] = &[
         id: XCODE_SIMCTL_DEVICES,
         max_calls_per_scan: 1,
         disable_env: "SIZETRAIL_NO_XCODE_PROBE",
+        known_side_effects: SIMCTL_SIDE_EFFECTS,
         command: ReadOnlyCommand {
             program: "/usr/bin/xcrun",
             arguments: &["simctl", "list", "--json", "devices"],
@@ -107,6 +119,7 @@ pub const SIDE_EFFECT_REGISTRY: &[ProbePolicy] = &[
         id: XCODE_SIMCTL_RUNTIMES,
         max_calls_per_scan: 1,
         disable_env: "SIZETRAIL_NO_XCODE_PROBE",
+        known_side_effects: SIMCTL_SIDE_EFFECTS,
         command: ReadOnlyCommand {
             program: "/usr/bin/xcrun",
             arguments: &["simctl", "list", "--json", "runtimes"],
@@ -351,17 +364,42 @@ mod tests {
             SIDE_EFFECT_REGISTRY[3].command.arguments,
             ["simctl", "list", "--json", "devices"]
         );
+        assert_eq!(
+            SIDE_EFFECT_REGISTRY[3].known_side_effects,
+            [
+                "xcrun_may_create_or_refresh_resolver_cache_in_darwin_user_temp_dir",
+                "xcrun_may_access_the_controlling_terminal",
+                "simctl_may_start_or_connect_coresimulator_services",
+            ]
+        );
         assert_eq!(SIDE_EFFECT_REGISTRY[4].id, XCODE_SIMCTL_RUNTIMES);
         assert_eq!(SIDE_EFFECT_REGISTRY[4].command.program, "/usr/bin/xcrun");
         assert_eq!(
             SIDE_EFFECT_REGISTRY[4].command.arguments,
             ["simctl", "list", "--json", "runtimes"]
         );
+        assert_eq!(
+            SIDE_EFFECT_REGISTRY[4].known_side_effects,
+            SIDE_EFFECT_REGISTRY[3].known_side_effects
+        );
         for policy in SIDE_EFFECT_REGISTRY {
             assert_eq!(policy.command.environment, XCODE_PROBE_ENVIRONMENT);
             assert_eq!(policy.command.remove_environment, XCODE_REMOVED_ENVIRONMENT);
             assert!(matches!(policy.command.timeout_millis, 10_000 | 30_000));
         }
+        assert_eq!(
+            XCODE_REMOVED_ENVIRONMENT,
+            [
+                "DEVELOPER_DIR",
+                "SDKROOT",
+                "TOOLCHAINS",
+                "xcrun_cache",
+                "xcrun_db",
+                "xcrun_nocache",
+                "xcrun_log",
+                "xcrun_verbose",
+            ]
+        );
     }
 
     #[test]
@@ -383,6 +421,7 @@ mod tests {
             id: DECLARED_ID,
             max_calls_per_scan: 1,
             disable_env: "SIZETRAIL_NO_FIXTURE_PROBE",
+            known_side_effects: &[],
             command: ReadOnlyCommand {
                 program: "/usr/bin/true",
                 arguments: &[],
@@ -413,6 +452,7 @@ mod tests {
             id: SLOW_ID,
             max_calls_per_scan: 1,
             disable_env: "SIZETRAIL_NO_SLOW_FIXTURE",
+            known_side_effects: &[],
             command: ReadOnlyCommand {
                 program: "/bin/sleep",
                 arguments: &["1"],

@@ -66,10 +66,12 @@ closed Rust API policy, a runtime tree snapshot harness, and a deny-write Seatbe
 hosted macOS runners. Platform loader registration to a character device is narrowly documented and
 does not modify user or system data.
 
-Read operations can still have side effects. In particular, `simctl` may start or connect to Apple’s
-per-user CoreSimulator services. Each external probe is a version-gated registry entry with a hard
-call limit, timeout, and disable switch. `doctor` reports concrete target capabilities and errno; it
-does not claim to know a global Full Disk Access state.
+Read operations can still have side effects. In particular, `xcrun` may create or refresh resolver
+cache state under the Darwin user temporary directory or access the controlling terminal, and `simctl`
+may start or connect to Apple’s per-user CoreSimulator services. Each external probe is a version-gated registry
+entry with a hard call limit, timeout, disable switch, and typed list of known side effects.
+`doctor` reports that list plus concrete target capabilities and errno; it does not claim to know a
+global Full Disk Access state.
 
 ## Install
 

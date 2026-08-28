@@ -167,6 +167,7 @@ mod tests {
             id: xcode::SELECT_DEVELOPER_DIR,
             max_calls_per_scan: 1,
             disable_env: "SIZETRAIL_NO_XCODE_PROBE_FIXTURE",
+            known_side_effects: &[],
             command: ReadOnlyCommand {
                 program: "/usr/bin/false",
                 arguments: &[],
@@ -179,6 +180,7 @@ mod tests {
             id: xcode::XCODEBUILD_VERSION,
             max_calls_per_scan: 1,
             disable_env: "SIZETRAIL_NO_XCODE_PROBE_FIXTURE",
+            known_side_effects: &[],
             command: ReadOnlyCommand {
                 program: "/usr/bin/printf",
                 arguments: &["Xcode 26.0\nBuild version Fixture\n"],
@@ -191,6 +193,7 @@ mod tests {
             id: xcode::FIRST_LAUNCH_STATUS,
             max_calls_per_scan: 1,
             disable_env: "SIZETRAIL_NO_XCODE_PROBE_FIXTURE",
+            known_side_effects: &[],
             command: ReadOnlyCommand {
                 program: "/usr/bin/true",
                 arguments: &[],
@@ -206,6 +209,7 @@ mod tests {
             id: xcode::SELECT_DEVELOPER_DIR,
             max_calls_per_scan: 1,
             disable_env: "SIZETRAIL_NO_XCODE_PROBE_FIXTURE",
+            known_side_effects: &[],
             command: ReadOnlyCommand {
                 program: "/usr/bin/printf",
                 arguments: &["/Applications/Xcode.app/Contents/Developer\n"],
@@ -218,6 +222,7 @@ mod tests {
             id: xcode::XCODEBUILD_VERSION,
             max_calls_per_scan: 1,
             disable_env: "SIZETRAIL_NO_XCODE_PROBE_FIXTURE",
+            known_side_effects: &[],
             command: ReadOnlyCommand {
                 program: "/usr/bin/printf",
                 arguments: &["Xcode 999.0\nBuild version Fixture\n"],
@@ -230,6 +235,7 @@ mod tests {
             id: xcode::FIRST_LAUNCH_STATUS,
             max_calls_per_scan: 1,
             disable_env: "SIZETRAIL_NO_XCODE_PROBE_FIXTURE",
+            known_side_effects: &[],
             command: ReadOnlyCommand {
                 program: "/usr/bin/true",
                 arguments: &[],
@@ -247,6 +253,7 @@ mod tests {
             id: xcode::SIMCTL_DEVICES,
             max_calls_per_scan: 1,
             disable_env: "SIZETRAIL_NO_XCODE_PROBE_FIXTURE",
+            known_side_effects: &[],
             command: ReadOnlyCommand {
                 program: "/usr/bin/printf",
                 arguments: &[DEVICES_JSON],
@@ -259,6 +266,7 @@ mod tests {
             id: xcode::SIMCTL_RUNTIMES,
             max_calls_per_scan: 1,
             disable_env: "SIZETRAIL_NO_XCODE_PROBE_FIXTURE",
+            known_side_effects: &[],
             command: ReadOnlyCommand {
                 program: "/usr/bin/printf",
                 arguments: &[RUNTIMES_JSON],

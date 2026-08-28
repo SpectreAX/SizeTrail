@@ -39,6 +39,7 @@ environment=(
   "XDG_DATA_HOME=$probe_root/xdg/data"
   "XDG_STATE_HOME=$probe_root/xdg/state"
   "XDG_RUNTIME_DIR=$probe_root/xdg/runtime"
+  "SIZETRAIL_NO_XCODE_PROBE=1"
 )
 
 run_token="sizetrail-zero-write-${GITHUB_RUN_ID:-local}-$$-$RANDOM"

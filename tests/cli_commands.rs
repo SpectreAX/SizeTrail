@@ -117,6 +117,13 @@ fn doctor_can_skip_xcode_without_starting_coresimulator() {
             .len(),
         5
     );
+    assert_eq!(
+        json["side_effect_policy"][3]["known_side_effects"]
+            .as_array()
+            .expect("simctl side effects must be typed")
+            .len(),
+        3
+    );
 }
 
 #[test]

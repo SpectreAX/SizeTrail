@@ -332,6 +332,7 @@ fn side_effect_policy() -> Vec<serde_json::Value> {
                 "probe_id": policy.id.as_str(),
                 "max_calls_per_scan": policy.max_calls_per_scan,
                 "disable_environment": policy.disable_env,
+                "known_side_effects": policy.known_side_effects,
                 "program": policy.command.program,
                 "arguments": policy.command.arguments,
                 "timeout_millis": policy.command.timeout_millis,

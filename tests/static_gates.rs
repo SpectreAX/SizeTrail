@@ -558,6 +558,38 @@ fn sandbox_gate_rejects_a_scan_that_measured_nothing() {
 }
 
 #[test]
+fn sandbox_gate_disables_registered_external_probes_without_skipping_measurement() {
+    let fixture = TempDir::new().expect("sandbox fixture must be created");
+    let source = fixture.path().join("probe_boundary.c");
+    let fake_binary = fixture.path().join("sizetrail-probe-boundary");
+    fs::write(
+        &source,
+        "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\nint main(void) { const char *gate = getenv(\"SIZETRAIL_NO_XCODE_PROBE\"); if (gate == NULL || strcmp(gate, \"1\") != 0) return 42; puts(\"{\\\"schema_version\\\":\\\"0.1.0-unstable\\\",\\\"payload\\\":{\\\"regions\\\":[{\\\"id\\\":\\\"capacity\\\",\\\"status\\\":\\\"complete\\\"}]}}\"); return 0; }\n",
+    )
+    .expect("probe-boundary fixture source must be written");
+    let compiled = Command::new("xcrun")
+        .args(["clang", "-Wall", "-Wextra", "-Werror"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&fake_binary)
+        .status()
+        .expect("probe-boundary fixture compiler must run");
+    assert!(compiled.success(), "probe-boundary fixture must compile");
+
+    let output = run_script(
+        "check-zero-write-sandbox.sh",
+        fixture.path(),
+        [fake_binary.as_os_str()],
+    );
+    assert!(
+        output.status.success(),
+        "product-process sandbox did not close the registered external-probe boundary\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn apfs_counterexample_construction_exceptions_stay_empty() {
     let source = fs::read_to_string(repository_root().join("tests/apfs_counterexamples.rs"))
         .expect("counterexample tests must be readable");
