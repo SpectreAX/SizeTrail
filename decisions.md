@@ -1052,6 +1052,31 @@ Q22 穷举 CLI 面时没有列 `--version`，实现遂以 `disable_version_flag(
 
 ---
 
+## Q49 — sandbox 只证明了 `scan`，矩阵却按产品属性表述
+
+P1.2 建立 deny-write sandbox 时只有 `scan` 存在，当时明确记下「未来新增 `doctor`/`explain`/`rules`/`completion` 后需纳入同一门禁」。子命令后来都实现并随二进制发布，门禁没跟。
+
+于是通道覆盖矩阵有两行声称了证据不支持的内容：
+
+- `explain --from file` —— 「read-only harness / sandbox 覆盖写尝试」
+- `completion` 生成 —— 「snapshot harness + sandbox」
+
+而 `check-zero-write-sandbox.sh` 全程只执行 `"$binary" scan`。**这不是实现缺陷，是过度声称** —— 按 AGENTS.md 的排序比崩溃更严重。Q48 加 `--version` 时又立刻重犯了一次同样的模式：新 CLI 面既不在矩阵也不在门禁里。
+
+**决策：sandbox 对每个宣告的子命令与 `--version` 各起一次独立运行，各用自己的 violation token，各带一条 fail-closed 的工作断言。**
+
+只检查退出码不够（§9.0）：把一切变成早期错误的回归会让门禁保持绿色。因此每条命令都必须出示产物 —— `scan` 要 `capacity` 为 `complete`，`doctor` 要 root `readable`，`rules` 要非空 `evidence`，`explain --from` 要报出「finding 不在所给报告中」而非打开失败（这才区分「读到了报告」与「根本没走到那一步」）。
+
+**另加结构性约束：静态测试枚举二进制 `--help` 宣告的子命令，与门禁脚本比对。** 仅在文档里写一句「未来新增子命令要记得纳入」已经被证明无效 —— 那正是本条决策要修的东西。新增子命令而不纳入观测现在会让测试失败。
+
+`doctor` 在探测开关关闭时退出 3（region 适用但未测量），与 `--no-xcode` 的 `excluded_by_user`（退出 0）语义不同，两者都被接受为正常终态。
+
+被否：只把矩阵那两行改成「—」而不扩门禁（放弃可得的证据）；对全部子命令共用一个 token（无法定位是哪条命令尝试写）；只加文档提醒（已被本条证伪）。
+
+影响：`scripts/check-zero-write-sandbox.sh`、`tests/static_gates.rs`、`SPEC.md` §12.1。
+
+---
+
 ## 附录 A — 实测环境基线
 
 采集于 2026-08-26，作为规则表量级参考与回归基线：

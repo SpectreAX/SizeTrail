@@ -520,9 +520,58 @@ fn minimum_macos_gate_rejects_newer_deployment_target() {
     assert_rejected(output, "minimum macOS gate");
 }
 
-/// A document that satisfies every other sandbox assertion, so a negative fixture built on it
-/// can only be rejected for the one property under test.
+/// A document that satisfies every `scan` assertion, so a negative fixture built on it can only be
+/// rejected for the one property under test. `scan` is the first command the gate observes, so a
+/// fixture meant to be rejected never reaches the later subcommands.
 const COMPLETE_ENOUGH_DOCUMENT: &str = r#"{"schema_version":"0.1.0-unstable","payload":{"regions":[{"id":"capacity","status":"complete"}]}}"#;
+
+/// A stand-in for the whole CLI surface, needed by fixtures that must pass the gate rather than be
+/// rejected by it: the sandbox observes every advertised subcommand, so a fake that answers only
+/// `scan` fails on the next one (Q49). Returning 42 when the probe kill-switch is absent is what
+/// proves the gate sets it.
+const CLI_SURFACE_FIXTURE: &str = r##"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int main(int argc, char **argv) {
+    const char *gate = getenv("SIZETRAIL_NO_XCODE_PROBE");
+    if (gate == NULL || strcmp(gate, "1") != 0) {
+        return 42;
+    }
+
+    const char *command = argc > 1 ? argv[1] : "";
+
+    if (strcmp(command, "scan") == 0) {
+        puts("{\"schema_version\":\"0.1.0-unstable\",\"payload\":"
+             "{\"regions\":[{\"id\":\"capacity\",\"status\":\"complete\"}]}}");
+        return 0;
+    }
+    if (strcmp(command, "doctor") == 0) {
+        puts("{\"side_effect_policy\":[],\"root\":{\"status\":\"readable\"}}");
+        return 0;
+    }
+    if (strcmp(command, "rules") == 0) {
+        puts("[{\"evidence\":\"fixture rule\"}]");
+        return 0;
+    }
+    if (strcmp(command, "completion") == 0) {
+        puts("#compdef sizetrail");
+        return 0;
+    }
+    if (strcmp(command, "explain") == 0) {
+        fputs("sizetrail: finding is absent from the supplied report\n", stderr);
+        return 1;
+    }
+    if (strcmp(command, "--version") == 0) {
+        puts("sizetrail 0.0.0-fixture");
+        return 0;
+    }
+
+    puts("Commands:\n  scan\n  doctor\n  rules\n  completion\n  explain");
+    return 0;
+}
+"##;
 
 fn write_fake_binary(directory: &Path, name: &str, body: &str) -> PathBuf {
     let binary = directory.join(name);
@@ -587,11 +636,7 @@ fn sandbox_gate_disables_registered_external_probes_without_skipping_measurement
     let fixture = TempDir::new().expect("sandbox fixture must be created");
     let source = fixture.path().join("probe_boundary.c");
     let fake_binary = fixture.path().join("sizetrail-probe-boundary");
-    fs::write(
-        &source,
-        "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\nint main(void) { const char *gate = getenv(\"SIZETRAIL_NO_XCODE_PROBE\"); if (gate == NULL || strcmp(gate, \"1\") != 0) return 42; puts(\"{\\\"schema_version\\\":\\\"0.1.0-unstable\\\",\\\"payload\\\":{\\\"regions\\\":[{\\\"id\\\":\\\"capacity\\\",\\\"status\\\":\\\"complete\\\"}]}}\"); return 0; }\n",
-    )
-    .expect("probe-boundary fixture source must be written");
+    fs::write(&source, CLI_SURFACE_FIXTURE).expect("probe-boundary fixture source must be written");
     let compiled = Command::new("xcrun")
         .args(["clang", "-Wall", "-Wextra", "-Werror"])
         .arg(&source)
@@ -623,5 +668,54 @@ fn apfs_counterexample_construction_exceptions_stay_empty() {
         source.contains("const CONSTRUCTION_EXCEPTIONS: &[&str] = &[];"),
         "a counterexample construction exception was added; every entry silently removes \
          empirical evidence for the non-convergence rule and needs a decision record"
+    );
+}
+
+/// Q49: the sandbox proved only `scan` for three phases while the coverage matrix described the
+/// result as a property of the product. Enumerate what the binary actually offers so that adding a
+/// subcommand without observing it fails here instead of quietly widening the claim.
+#[test]
+fn the_zero_write_sandbox_exercises_every_subcommand_the_binary_offers() {
+    let root = repository_root();
+    let help = Command::new(env!("CARGO_BIN_EXE_sizetrail"))
+        .arg("--help")
+        .output()
+        .expect("help must run");
+    let advertised = String::from_utf8_lossy(&help.stdout);
+
+    let mut subcommands = BTreeSet::new();
+    let mut inside_commands = false;
+    for line in advertised.lines() {
+        if line.starts_with("Commands:") {
+            inside_commands = true;
+            continue;
+        }
+        if inside_commands {
+            if !line.starts_with("  ") {
+                break;
+            }
+            if let Some(name) = line.split_whitespace().next() {
+                subcommands.insert(name.to_owned());
+            }
+        }
+    }
+    subcommands.remove("help");
+    assert!(
+        subcommands.len() >= 5,
+        "failed to parse the advertised subcommands: {subcommands:?}"
+    );
+
+    let script = fs::read_to_string(root.join("scripts/check-zero-write-sandbox.sh"))
+        .expect("sandbox gate must be readable");
+    for name in &subcommands {
+        assert!(
+            script.contains(&format!("run_product {name} "))
+                || script.contains(&format!("run_product {name}\n")),
+            "the zero-write sandbox never runs `{name}`, so the claim does not cover it"
+        );
+    }
+    assert!(
+        script.contains("--version"),
+        "the version flag runs the binary and must be observed too"
     );
 }

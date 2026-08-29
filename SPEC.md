@@ -795,6 +795,8 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 
 `静态`包含 crate-root forbid、豁免边界、Clippy 清单锁；`符号锁`包含 extern 精确集合、无直接 `libc`、无 build script、禁止 inline asm/dynamic lookup；`运行时`包含 TreeSnapshot、高价值路径兜底与 deny-write sandbox；`专用`是本行的行为/差分 fixture。`—` 表示该层不覆盖，不能据此扩张安全声明。
 
+**deny-write sandbox 逐子命令观测（Q49）。** 它对二进制宣告的每个子命令（`scan`、`doctor`、`rules`、`completion`、`explain`）以及 `--version` 各起一次独立运行，每次使用自己的 violation token，并各带一条 fail-closed 的「确实做了工作」断言 —— 只证明 `scan` 却把结论表述为产品属性，正是本门禁要防的过度声称。静态测试枚举二进制的子命令并与门禁比对，因此新增子命令而不纳入观测会失败，不会静默扩张声明。
+
 | 通道 | 静态 | 符号锁 | 运行时 | registry | 专用证据 / 剩余空格 |
 |---|---|---|---|---|---|
 | safe `std` 文件写与元数据写 | 是 | — | 是 | — | Clippy 负向变异 + read-only harness + sandbox token |
@@ -814,7 +816,7 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | atime / 读诱发 metadata 写 | — | — | 是 | — | `VFS_ATIME_UPDATES_OFF` set+get |
 | autofs / mount trigger | — | — | sandbox 不证明 mount 状态 | — | `VFS_TRIGGER_RESOLVE_OFF` set+get；`EDEADLK`/失败令 root unknown |
 | nested mount 与 System/Data firmlink | — | — | — | — | 每对象比较真实 `(fsid,fileid)`，真实 fsid 改变即拒绝；synthetic boundary test |
-| 外部命令 / 子进程 | `Command` 仅 policy | — | 完整 scan sandbox 覆盖直接进程写尝试 | 是 | registry 精确锁定六条 Xcode/CoreSimulator probe；adapter 只能提交 `ProbeId`，不能提交程序、参数或用户输入 |
+| 外部命令 / 子进程 | `Command` 仅 policy | — | sandbox 逐子命令覆盖直接进程写尝试 | 是 | registry 精确锁定六条 Xcode/CoreSimulator probe；adapter 只能提交 `ProbeId`，不能提交程序、参数或用户输入 |
 | `/usr/bin/xcode-select -p` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 生产 probe 测试实际执行；只判 selection，标准 CLT → `not_present` |
 | `/usr/bin/xcodebuild -version` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 仅 selection 为完整 Xcode 候选后运行；固定 locale/清除重定向环境；未知版本降级 |
 | `/usr/bin/xcodebuild -checkFirstLaunchStatus` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 仅已验证版本运行；非零为 `not_ready`，绝不调用写入型 `-runFirstLaunch` / `-license accept` |
@@ -824,8 +826,8 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | child stdout/stderr 与进程生命周期 | `Command` 仅 policy | — | 完整 scan sandbox 覆盖调用进程 | 是 | 固定输出由 policy 并行排空；registry 硬 timeout 会终止并回收子进程，单测断言 typed `timed_out` 与调用计数 |
 | `simctl` 诱发 CoreSimulatorService / simdiskimaged 状态变化 | — | — | 不覆盖 daemon | 是（只限制调用次数） | 已知读副作用；无自动重试、不 pkill daemon、可由 `SIZETRAIL_NO_XCODE_PROBE` 关闭；daemon 自身写 **未覆盖** |
 | 内置 TOML 规则解析 | 无外置 rules path；`include_str!` 编入 | — | scan sandbox 覆盖依赖运行路径 | — | schema `deny_unknown_fields`、无 command 字段、每条 rule + fixture 分类断言；toml crate 未执行路径仍不作全局保证 |
-| `explain --from file` 显式报告文件读取 | safe read API；无写 API | — | read-only harness / sandbox 覆盖写尝试 | — | 仅用户指定报告；先 IOPOL + dataless gate；不重探 finding path、不运行 adapter。stdin 模式无文件读取 |
-| `completion` 生成 | safe stdout | — | snapshot harness + sandbox | — | clap builder + `clap_complete` 只写 stdout；集成测试断言 cwd 无新文件 |
+| `explain --from file` 显式报告文件读取 | safe read API；无写 API | — | read-only harness；sandbox 逐子命令观测 | — | 仅用户指定报告；先 IOPOL + dataless gate；不重探 finding path、不运行 adapter。stdin 模式无文件读取 |
+| `completion` 生成 | safe stdout | — | snapshot harness；sandbox 逐子命令观测 | — | clap builder + `clap_complete` 只写 stdout；集成测试断言 cwd 无新文件 |
 | 人类 finding 输出 | safe stdout/stderr | — | sandbox 明确允许输出 fd | — | 文案不稳定；稳定面是 JSON typed signals。当前实现每个 inventory stage 完成后立即输出该 stage 的 findings，不等待全部 adapter 完成 |
 | simctl stderr | safe stderr | — | sandbox 明确允许 stderr fd | 是 | 原文只写 stderr；payload 仅 `simctl_stderr_nonempty` 稳定标签，避免主机文本污染 fixture |
 | build script | crate root 不覆盖 | 明确断言不存在 | sandbox 构建后不覆盖 | — | 新增前必须重新开门禁 |

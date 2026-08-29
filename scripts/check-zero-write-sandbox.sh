@@ -44,9 +44,53 @@ environment=(
 
 run_token="sizetrail-zero-write-${GITHUB_RUN_ID:-local}-$$-$RANDOM"
 start_marker="$run_token-start"
-scan_marker="$run_token-scan"
 end_marker="$run_token-end"
 events="$probe_root/sandbox.ndjson"
+
+# Every subcommand ships in the released binary, so every subcommand must be observed. Proving
+# `scan` alone and describing the result as a property of the product is the over-claim this gate
+# exists to prevent (Q49).
+product_markers=()
+last_status=0
+
+run_product() {
+  local name="$1"
+  shift
+  local marker="$run_token-$name"
+  product_markers+=("$marker")
+  set +e
+  /usr/bin/env "${environment[@]}" "$sandbox" -p "$(profile_for "$marker")" \
+    "$binary" "$@" \
+    >"$probe_root/$name.stdout" 2>"$probe_root/$name.stderr"
+  last_status=$?
+  set -e
+}
+
+require_status() {
+  local name="$1"
+  shift
+  local candidate
+  for candidate in "$@"; do
+    if [[ $last_status -eq $candidate ]]; then
+      return
+    fi
+  done
+  echo "$name exited $last_status under the deny-write sandbox" >&2
+  cat "$probe_root/$name.stderr" >&2
+  exit 1
+}
+
+# A gate that only proves "nothing failed" is not a gate (§9.0): each command must show it did its
+# work, or a regression that turns everything into an early error would keep this check green.
+require_output() {
+  local name="$1"
+  local needle="$2"
+  if ! grep -Fq "$needle" "$probe_root/$name.stdout"; then
+    echo "$name produced no evidence of doing its work under the sandbox" >&2
+    cat "$probe_root/$name.stdout" >&2
+    exit 1
+  fi
+}
 
 profile_for() {
   printf '(version 1)(allow default)(deny file-write* (with message "%s"))(allow file-write-data (literal "/dev/dtracehelper"))' "$1"
@@ -114,29 +158,44 @@ observer_pid=$!
 # the observer is live before the product process runs.
 establish_observer "$start_marker" "$probe_root/home/.sizetrail-mutation"
 
-set +e
-/usr/bin/env "${environment[@]}" "$sandbox" -p "$(profile_for "$scan_marker")" \
-  "$binary" scan --json --root "$probe_root/home" \
-  >"$probe_root/scan.json" 2>"$probe_root/scan.stderr"
-scan_status=$?
-set -e
+run_product scan scan --json --root "$probe_root/home"
+require_status scan 0 3
+require_output scan '"schema_version":"0.1.0-unstable"'
+require_output scan '"id":"capacity","status":"complete"'
 
-if [[ $scan_status -ne 0 && $scan_status -ne 3 ]]; then
-  echo "scan exited $scan_status under the deny-write sandbox" >&2
-  cat "$probe_root/scan.stderr" >&2
+# The probe kill-switch leaves the Xcode region applicable but unmeasured, which is exit 3 by
+# Q21 — semantically distinct from the `--no-xcode` exclusion that exits 0.
+run_product doctor doctor --json
+require_status doctor 0 3
+require_output doctor '"side_effect_policy"'
+require_output doctor '"status":"readable"'
+
+run_product rules rules --json
+require_status rules 0
+require_output rules '"evidence"'
+
+run_product completion completion zsh
+require_status completion 0
+require_output completion 'sizetrail'
+
+# The report is the one this run just produced, so the absent-finding path is reached only after the
+# file was opened, parsed and schema-checked. A failure to open would report a different error, so
+# this distinguishes "read the report" from "never got that far".
+run_product explain explain --from "$probe_root/scan.stdout" 'f1:xcode:0000000000000000'
+require_status explain 1
+if ! grep -Fq 'absent from the supplied report' "$probe_root/explain.stderr"; then
+  echo "explain did not reach the supplied report under the sandbox" >&2
+  cat "$probe_root/explain.stderr" >&2
   exit 1
 fi
 
-grep -q '"schema_version":"0.1.0-unstable"' "$probe_root/scan.json"
+run_product version --version
+require_status version 0
+require_output version 'sizetrail'
 
-# A gate that only proves "nothing failed" is not a gate (§9.0). Assert the measurement
-# actually ran: a regression that makes root initialization fail everywhere would otherwise
-# keep this check green while proving nothing about the read path.
-if ! grep -q '"id":"capacity","status":"complete"' "$probe_root/scan.json"; then
-  echo "scan produced no completed capacity measurement under the sandbox" >&2
-  cat "$probe_root/scan.json" >&2
-  exit 1
-fi
+run_product help
+require_status help 0
+require_output help 'completion'
 
 set +e
 /usr/bin/env "${environment[@]}" "$sandbox" -p "$(profile_for "$end_marker")" \
@@ -151,8 +210,10 @@ if [[ $end_status -eq 0 || -e "$probe_root/end-mutation" ]]; then
 fi
 wait_for_marker "$end_marker" "file-write-create" "$probe_root/end-mutation"
 
-if grep -Fq "$scan_marker" "$events"; then
-  grep -F "$scan_marker" "$events" >&2
-  echo "scan attempted a file write" >&2
-  exit 1
-fi
+for marker in "${product_markers[@]}"; do
+  if grep -Fq "$marker" "$events"; then
+    grep -F "$marker" "$events" >&2
+    echo "${marker#"$run_token-"} attempted a file write" >&2
+    exit 1
+  fi
+done
