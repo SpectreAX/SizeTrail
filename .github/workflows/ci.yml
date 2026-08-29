@@ -179,5 +179,21 @@ jobs:
           du -sh "$HOME/Library/Developer/Xcode/DerivedData" 2>/dev/null || true
           ls -1 "$HOME/Library/Developer/Xcode/DerivedData" 2>/dev/null || true
 
+      # What the product actually attributed, printed unconditionally. A lane that only reports
+      # pass/fail cannot show which stores were reported versus explained by a typed gap, and
+      # "at least one finding" would stay green while a whole category went missing.
+      - name: What was attributed and what was declared missing
+        run: |
+          cargo build --locked --release
+          ./target/release/sizetrail scan --json > /tmp/real-scan.json || true
+          echo '--- rule_id x normalized_path ---'
+          jq -r '.payload.findings[] | "\(.rule_id)\t\(.normalized_path)"' /tmp/real-scan.json
+          echo '--- regions ---'
+          jq -c '.payload.regions' /tmp/real-scan.json
+          echo '--- coverage_gaps ---'
+          jq -c '.payload.coverage_gaps' /tmp/real-scan.json
+          echo '--- simulator directories present on disk ---'
+          ls -1 "$HOME/Library/Developer/CoreSimulator/Devices" 2>/dev/null | wc -l
+
       - name: Real-environment attribution and version-gate degradation
         run: cargo test --locked --test real_environment -- --ignored --nocapture
