@@ -194,6 +194,15 @@ fn home_and_prefix_stores_remain_separate_and_keg_identity_comes_from_directorie
             .join("Library/Caches/Homebrew/downloads/source.tar.gz"),
         "download",
     );
+    fs::create_dir_all(fixture.path().join("Library/Caches/Homebrew/Cask"))
+        .expect("Cask cache fixture must be created");
+    symlink(
+        "../downloads/source.tar.gz",
+        fixture
+            .path()
+            .join("Library/Caches/Homebrew/Cask/example--1.0.tar.gz"),
+    )
+    .expect("Cask download link must be created");
     let keg = fixture.path().join("opt/homebrew/Cellar/example/1.2.3");
     write(&keg.join("lib/libexample.1.dylib"), "library-bytes");
     symlink("libexample.1.dylib", keg.join("lib/libexample.dylib"))
@@ -221,8 +230,9 @@ fn home_and_prefix_stores_remain_separate_and_keg_identity_comes_from_directorie
         Ok(false),
         Ok(false),
     );
+    let mut ctx = PolicyCtx::for_scan();
     let inventory = adapter.inventory(
-        &mut PolicyCtx::for_scan(),
+        &mut ctx,
         &AdapterState::Ready {
             version: "6.0.19".to_owned(),
         },
@@ -237,6 +247,15 @@ fn home_and_prefix_stores_remain_separate_and_keg_identity_comes_from_directorie
         download.normalized_path,
         "~/Library/Caches/Homebrew/downloads"
     );
+    assert_eq!(exact_bytes(download, MeasurementBasis::LogicalSize), 8);
+    for policy in SIDE_EFFECT_REGISTRY {
+        assert_eq!(
+            ctx.count(policy.id),
+            0,
+            "complete Homebrew inventory invoked {}",
+            policy.id.as_str()
+        );
+    }
     let cellar = inventory
         .items
         .iter()

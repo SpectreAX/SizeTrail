@@ -61,8 +61,13 @@ pub fn open_prefix_root(layout: &Layout) -> Result<Root, RootError> {
 }
 
 impl Layout {
-    fn normalized_prefix_path(&self, prefix_root: &Root, path: &Path) -> Option<String> {
-        let relative = path.strip_prefix(prefix_root.path()).ok()?;
+    pub(crate) fn normalized_prefix_path(
+        &self,
+        prefix_root: Option<&Root>,
+        path: &Path,
+    ) -> Option<String> {
+        let physical_prefix = prefix_root.map_or(self.prefix.as_path(), Root::path);
+        let relative = path.strip_prefix(physical_prefix).ok()?;
         Some(
             self.reported_prefix
                 .join(relative)
@@ -333,7 +338,7 @@ impl HomebrewAdapter<'_> {
         let normalized_path = if home_side {
             normalized_report_path(self.home_root.path(), &path).ok()
         } else {
-            self.layout.normalized_prefix_path(root, &path)
+            self.layout.normalized_prefix_path(Some(root), &path)
         };
         let Some(normalized_path) = normalized_path else {
             inventory.gaps.push(InventoryGap {

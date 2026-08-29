@@ -3,6 +3,13 @@
 use assert_cmd::cargo::cargo_bin_cmd;
 use serde_json::Value;
 
+fn write_fixture(path: &std::path::Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("fixture parent must be created");
+    }
+    std::fs::write(path, contents).expect("fixture file must be written");
+}
+
 #[test]
 fn exit_codes_distinguish_complete_fatal_usage_and_informational_scans() {
     let fixture = tempfile::tempdir().expect("fixture root must be created");
@@ -21,9 +28,12 @@ fn exit_codes_distinguish_complete_fatal_usage_and_informational_scans() {
     );
     let complete_json: Value =
         serde_json::from_slice(&complete.stdout).expect("complete stdout must be JSON");
-    assert_eq!(
-        complete_json["payload"]["regions"][1]["status"],
-        "excluded_by_user"
+    assert!(
+        complete_json["payload"]["regions"]
+            .as_array()
+            .expect("regions must be an array")
+            .iter()
+            .any(|region| region["id"] == "xcode" && region["status"] == "excluded_by_user")
     );
 
     let informational = cargo_bin_cmd!("sizetrail")
@@ -115,4 +125,78 @@ fn the_binary_reports_its_build_version_on_the_cli_and_in_json() {
     let diagnosis: Value =
         serde_json::from_slice(&doctor.stdout).expect("doctor must emit a JSON document");
     assert_eq!(diagnosis["tool_version"], expected);
+}
+
+#[test]
+fn no_homebrew_is_an_explicit_successful_exclusion() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    let output = cargo_bin_cmd!("sizetrail")
+        .args(["scan", "--json", "--no-xcode", "--no-homebrew", "--root"])
+        .arg(fixture.path())
+        .output()
+        .expect("excluded scan must run");
+
+    assert_eq!(output.status.code(), Some(0));
+    let document: Value =
+        serde_json::from_slice(&output.stdout).expect("scan must emit one JSON document");
+    assert!(
+        document["payload"]["regions"]
+            .as_array()
+            .expect("regions must be an array")
+            .iter()
+            .any(|region| { region["id"] == "homebrew" && region["status"] == "excluded_by_user" })
+    );
+}
+
+#[test]
+fn root_fixture_discovers_homebrew_without_running_brew() {
+    const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    write_fixture(&fixture.path().join("opt/homebrew/bin/brew"), "fixture");
+    write_fixture(
+        &fixture
+            .path()
+            .join("opt/homebrew/Cellar/example/1.0/bin/example"),
+        "installed",
+    );
+    write_fixture(
+        &fixture.path().join("opt/homebrew/.git/HEAD"),
+        "ref: refs/heads/stable\n",
+    );
+    write_fixture(
+        &fixture.path().join("opt/homebrew/.git/refs/heads/stable"),
+        SHA,
+    );
+    write_fixture(
+        &fixture
+            .path()
+            .join(format!("opt/homebrew/.git/describe-cache/{SHA}")),
+        "6.0.19\n",
+    );
+    let output = cargo_bin_cmd!("sizetrail")
+        .args(["scan", "--json", "--no-xcode", "--root"])
+        .arg(fixture.path())
+        .output()
+        .expect("Homebrew fixture scan must run");
+
+    assert!(matches!(output.status.code(), Some(0 | 3)));
+    let document: Value =
+        serde_json::from_slice(&output.stdout).expect("scan must emit one JSON document");
+    assert_eq!(
+        document["environment"]["tool_versions"]["homebrew"],
+        "6.0.19"
+    );
+    assert!(
+        document["payload"]["findings"]
+            .as_array()
+            .expect("findings must be an array")
+            .iter()
+            .any(|finding| {
+                finding["rule_id"] == "homebrew.cellar"
+                    && finding["id"]
+                        .as_str()
+                        .is_some_and(|id| id.starts_with("f1:homebrew:"))
+                    && finding["normalized_path"] == "/opt/homebrew/Cellar/example/1.0"
+            })
+    );
 }

@@ -18,7 +18,7 @@ use sizetrail::model::EnvironmentEnvelope;
 use sizetrail::policy::{PolicyCtx, SIDE_EFFECT_REGISTRY};
 use sizetrail::rules::builtin_rules;
 use sizetrail::scan::{
-    excluded_adapter_report, scan, unmeasurable_adapter_report, xcode_report,
+    excluded_adapter_report, homebrew_report, scan, unmeasurable_adapter_report, xcode_report,
     xcode_report_with_sink,
 };
 
@@ -141,23 +141,24 @@ fn run() -> Result<u8, String> {
 
     match subcommand {
         "scan" => {
-            let root = matches
-                .get_one::<PathBuf>("root")
-                .cloned()
+            let root_override = matches.get_one::<PathBuf>("root").cloned();
+            let root = root_override
+                .clone()
                 .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
                 .ok_or_else(|| "HOME is unavailable and --root was not supplied".to_owned())?;
             let no_xcode = arguments.get_flag("no-xcode");
+            let no_homebrew = arguments.get_flag("no-homebrew");
             let json_output = arguments.get_flag("json");
             let requested_excludes = arguments
                 .get_many::<PathBuf>("exclude")
                 .map(|values| values.cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
-            if no_xcode && !requested_excludes.is_empty() {
+            if no_xcode && no_homebrew && !requested_excludes.is_empty() {
                 eprintln!("sizetrail: --exclude matches no enabled scan root");
                 return Ok(2);
             }
             let opened = Root::open(&root);
-            let excludes = if no_xcode {
+            let excludes = if no_xcode && no_homebrew {
                 Vec::new()
             } else if let Ok(scan_root) = opened.as_ref() {
                 match validate_excludes(scan_root, &root, &requested_excludes) {
@@ -180,10 +181,17 @@ fn run() -> Result<u8, String> {
             let capacity = opened
                 .as_ref()
                 .map_or_else(|_| capacity::measure(&root), capacity::measure_root);
+            let mut ctx = PolicyCtx::for_scan();
+            let homebrew = if no_homebrew {
+                excluded_adapter_report("homebrew")
+            } else if let Ok(scan_root) = opened.as_ref() {
+                homebrew_report(scan_root, &mut ctx, &excludes, root_override.as_deref())
+            } else {
+                unmeasurable_adapter_report("homebrew")
+            };
             let xcode = if no_xcode {
                 excluded_adapter_report("xcode")
             } else if let Ok(scan_root) = opened.as_ref() {
-                let mut ctx = PolicyCtx::for_scan();
                 if json_output {
                     xcode_report(scan_root, &mut ctx, &excludes)
                 } else {
@@ -197,12 +205,25 @@ fn run() -> Result<u8, String> {
             } else {
                 unmeasurable_adapter_report("xcode")
             };
+            if !json_output {
+                for finding in &homebrew.findings {
+                    println!(
+                        "{}\t{}\t{}",
+                        finding.id, finding.normalized_path, finding.summary
+                    );
+                }
+            }
+            if let Some(version) = &homebrew.tool_version {
+                environment
+                    .tool_versions
+                    .insert("homebrew".to_owned(), version.clone());
+            }
             if let Some(version) = &xcode.tool_version {
                 environment
                     .tool_versions
                     .insert("xcode".to_owned(), version.clone());
             }
-            let document = scan(environment, capacity, vec![xcode]);
+            let document = scan(environment, capacity, vec![homebrew, xcode]);
 
             if json_output {
                 let rendered =
@@ -210,7 +231,7 @@ fn run() -> Result<u8, String> {
                 println!("{rendered}");
             } else {
                 if document.payload.findings.is_empty() {
-                    println!("No Xcode storage findings were observed.");
+                    println!("No developer toolchain storage findings were observed.");
                 }
             }
 

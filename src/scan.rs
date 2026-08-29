@@ -1,3 +1,4 @@
+use crate::adapters::homebrew::{HomebrewAdapter, Layout, discover_layout, open_prefix_root};
 use crate::adapters::xcode::XcodeAdapter;
 use crate::adapters::{AdapterState, InventoryGapReason, ToolchainAdapter};
 use crate::capacity::CapacityReport;
@@ -24,6 +25,147 @@ pub fn xcode_report(
     excludes: &[std::path::PathBuf],
 ) -> AdapterReport {
     xcode_report_with_sink(root, ctx, excludes, |_| {})
+}
+
+pub fn homebrew_report(
+    home_root: &Root,
+    ctx: &mut PolicyCtx<'_>,
+    excludes: &[std::path::PathBuf],
+    sandbox_root: Option<&std::path::Path>,
+) -> AdapterReport {
+    let Some(layout) = discover_layout(sandbox_root) else {
+        return AdapterReport {
+            id: "homebrew".to_owned(),
+            status: RegionStatus::NotPresent,
+            tool_version: None,
+            warnings: Vec::new(),
+            findings: Vec::new(),
+            coverage_gaps: Vec::new(),
+        };
+    };
+    let home_snapshots = home_root
+        .volume_has_snapshots()
+        .map_err(|error| error.raw_os_error());
+    match open_prefix_root(&layout) {
+        Ok(prefix_root) => {
+            let prefix_snapshots = prefix_root
+                .volume_has_snapshots()
+                .map_err(|error| error.raw_os_error());
+            let adapter = HomebrewAdapter::new(
+                home_root,
+                &prefix_root,
+                &layout,
+                excludes,
+                home_snapshots,
+                prefix_snapshots,
+            );
+            finish_homebrew_report(
+                &adapter,
+                ctx,
+                home_root,
+                &layout,
+                Some(&prefix_root),
+                excludes,
+            )
+        }
+        Err(_) => {
+            let adapter = HomebrewAdapter::without_prefix(
+                home_root,
+                &layout,
+                excludes,
+                home_snapshots,
+                InventoryGapReason::TraversalFailed,
+            );
+            finish_homebrew_report(&adapter, ctx, home_root, &layout, None, excludes)
+        }
+    }
+}
+
+fn finish_homebrew_report(
+    adapter: &HomebrewAdapter<'_>,
+    ctx: &mut PolicyCtx<'_>,
+    home_root: &Root,
+    layout: &Layout,
+    prefix_root: Option<&Root>,
+    excludes: &[std::path::PathBuf],
+) -> AdapterReport {
+    let state = adapter.probe(ctx);
+    let mut inventory = adapter.inventory(ctx, &state);
+    let findings = match adapter.classify(&inventory) {
+        Ok(findings) => findings,
+        Err(reason) => {
+            inventory
+                .gaps
+                .push(crate::adapters::InventoryGap::diagnostic(
+                    "homebrew", reason,
+                ));
+            Vec::new()
+        }
+    };
+    inventory.gaps.sort_by(|left, right| {
+        left.region
+            .cmp(right.region)
+            .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.reason.cmp(&right.reason))
+    });
+    let mut coverage_gaps = inventory
+        .gaps
+        .into_iter()
+        .enumerate()
+        .map(|(index, gap)| CoverageGap {
+            id: format!("homebrew.{}.{index}", gap_reason_id(gap.reason)),
+            plane: MeasurementPlane::ToolchainAttribution,
+            region: gap.region.to_owned(),
+            path: gap.path.as_deref().and_then(|path| {
+                layout
+                    .normalized_prefix_path(prefix_root, path)
+                    .or_else(|| crate::model::normalized_report_path(home_root.path(), path).ok())
+            }),
+            status: RegionStatus::Unmeasurable,
+            reason: coverage_reason(gap.reason),
+            stage: gap.stage.map(|stage| stage.as_str().to_owned()),
+            errno: gap.errno,
+        })
+        .collect::<Vec<_>>();
+    for (index, path) in excludes.iter().enumerate() {
+        coverage_gaps.push(CoverageGap {
+            id: format!("homebrew.excluded_by_user.{index}"),
+            plane: MeasurementPlane::ToolchainAttribution,
+            region: "homebrew".to_owned(),
+            path: layout
+                .normalized_prefix_path(prefix_root, path)
+                .or_else(|| crate::model::normalized_report_path(home_root.path(), path).ok()),
+            status: RegionStatus::ExcludedByUser,
+            reason: CoverageGapReason::ExcludedByUser,
+            stage: None,
+            errno: None,
+        });
+    }
+    let (status, tool_version) = match state {
+        AdapterState::Ready { version } => (
+            if coverage_gaps
+                .iter()
+                .all(|gap| gap.status != RegionStatus::Unmeasurable)
+            {
+                RegionStatus::Complete
+            } else {
+                RegionStatus::Unmeasurable
+            },
+            Some(version),
+        ),
+        AdapterState::NotPresent => (RegionStatus::NotPresent, None),
+        AdapterState::Degraded {
+            observed_version, ..
+        } => (RegionStatus::Unmeasurable, observed_version),
+    };
+    AdapterReport {
+        id: "homebrew".to_owned(),
+        status,
+        tool_version,
+        warnings: inventory.warnings,
+        findings,
+        coverage_gaps,
+    }
 }
 
 pub fn xcode_report_with_sink(

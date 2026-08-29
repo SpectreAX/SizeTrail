@@ -28,11 +28,13 @@ fn explicitly_excluded_adapter_scan_emits_a_complete_json_document() {
     assert_eq!(document["payload"]["regions"][0]["id"], "capacity");
     assert!(document["payload"]["capacity"].is_array());
     assert_eq!(document["payload"]["findings"], serde_json::json!([]));
-    assert_eq!(document["payload"]["regions"][1]["id"], "xcode");
-    assert_eq!(
-        document["payload"]["regions"][1]["status"],
-        "excluded_by_user"
-    );
+    let xcode = document["payload"]["regions"]
+        .as_array()
+        .expect("regions must be an array")
+        .iter()
+        .find(|region| region["id"] == "xcode")
+        .expect("xcode region must be present");
+    assert_eq!(xcode["status"], "excluded_by_user");
 }
 
 #[test]

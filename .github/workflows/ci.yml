@@ -148,6 +148,13 @@ jobs:
         run: |
           xcode-select -p
           xcodebuild -version
+          for prefix in /opt/homebrew /usr/local; do
+            if [ -e "$prefix/bin/brew" ] && { [ -d "$prefix/Cellar" ] || [ -d "$prefix/Caskroom" ]; }; then
+              echo "homebrew_prefix=$prefix"
+              ls -ld "$prefix/bin/brew" "$prefix/Cellar" "$prefix/Caskroom" 2>/dev/null || true
+              sed -n '1p' "$prefix/.git/HEAD" 2>/dev/null || true
+            fi
+          done
           # The adapter gates on this, and a hosted counterexample already showed it is not a
           # sufficient readiness signal (Q43), so record the raw status rather than inferring it.
           status=0; xcodebuild -checkFirstLaunchStatus || status=$?

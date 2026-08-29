@@ -3,6 +3,7 @@
 mod support;
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use std::os::unix::fs::symlink;
 use std::process::Command;
 use std::sync::Mutex;
 use support::{HighValueEntrySnapshot, ReadOnlyFixture};
@@ -78,4 +79,32 @@ fn high_value_fallback_detects_a_hard_coded_tmp_write() {
         new_entries.contains(&probe),
         "hard-coded /tmp mutation escaped the fallback snapshot"
     );
+}
+
+#[test]
+fn homebrew_scan_preserves_every_snapshotted_fixture_field() {
+    let fixture = ReadOnlyFixture::create().expect("fixture must be created");
+    std::fs::create_dir_all(fixture.home.join("opt/homebrew/bin"))
+        .expect("fixture prefix must be created");
+    std::fs::write(fixture.home.join("opt/homebrew/bin/brew"), b"fixture")
+        .expect("fixture launcher must be written");
+    let keg = fixture.home.join("opt/homebrew/Cellar/example/1.0/lib");
+    std::fs::create_dir_all(&keg).expect("fixture keg must be created");
+    std::fs::write(keg.join("libexample.1.dylib"), b"library")
+        .expect("fixture library must be written");
+    symlink("libexample.1.dylib", keg.join("libexample.dylib"))
+        .expect("fixture symlink must be created");
+    let before = fixture.snapshot().expect("baseline snapshot must succeed");
+
+    let output = cargo_bin_cmd!("sizetrail")
+        .args(["scan", "--json", "--no-xcode", "--root"])
+        .arg(&fixture.home)
+        .envs(fixture.environment())
+        .output()
+        .expect("Homebrew scan must run");
+    assert!(matches!(output.status.code(), Some(0 | 3)));
+    assert!(serde_json::from_slice::<serde_json::Value>(&output.stdout).is_ok());
+
+    let after = fixture.snapshot().expect("final snapshot must succeed");
+    assert_eq!(before, after);
 }

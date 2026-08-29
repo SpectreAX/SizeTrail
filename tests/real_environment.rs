@@ -89,6 +89,43 @@ fn region_status(document: &Value, id: &str) -> String {
         .unwrap_or_else(|| panic!("region {id} must be reported"))
 }
 
+#[test]
+#[ignore = "requires the hosted runner's real Homebrew installation"]
+fn real_homebrew_storage_is_attributed_without_crossing_into_applications() {
+    let prefix = [Path::new("/opt/homebrew"), Path::new("/usr/local")]
+        .into_iter()
+        .find(|prefix| {
+            prefix.join("bin/brew").exists()
+                && (prefix.join("Cellar").exists() || prefix.join("Caskroom").exists())
+        })
+        .expect("this lane requires the hosted runner's preinstalled Homebrew");
+    let document = scan_real_home();
+
+    assert_ne!(
+        region_status(&document, "homebrew"),
+        "\"not_present\"",
+        "a host with {} must not report Homebrew as absent; {}",
+        prefix.display(),
+        diagnostics(&document)
+    );
+    let findings = document["payload"]["findings"]
+        .as_array()
+        .expect("findings must be an array")
+        .iter()
+        .filter(|finding| finding["adapter_id"] == "homebrew")
+        .collect::<Vec<_>>();
+    assert!(
+        !findings.is_empty(),
+        "a populated Homebrew prefix produced no findings; {}",
+        diagnostics(&document)
+    );
+    assert!(findings.iter().all(|finding| {
+        !finding["normalized_path"]
+            .as_str()
+            .is_some_and(|path| path.starts_with("/Applications"))
+    }));
+}
+
 /// Assertion A: attribution over directories this project did not create.
 #[test]
 #[ignore = "requires a real Xcode installation; runs only on the Q44 lane"]

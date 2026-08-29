@@ -21,7 +21,7 @@ fn rules_json_is_the_compiled_toml_rule_set() {
         .expect("rules command must run");
     assert!(output.status.success());
     let rules: Value = serde_json::from_slice(&output.stdout).expect("rules stdout must be JSON");
-    assert_eq!(rules.as_array().expect("rules must be an array").len(), 5);
+    assert_eq!(rules.as_array().expect("rules must be an array").len(), 13);
     assert!(
         rules
             .as_array()
