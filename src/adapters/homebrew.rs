@@ -61,6 +61,12 @@ pub fn open_prefix_root(layout: &Layout) -> Result<Root, RootError> {
 }
 
 impl Layout {
+    pub fn physical_path_for_reported(&self, root: &Root, path: &Path) -> Option<PathBuf> {
+        path.strip_prefix(&self.reported_prefix)
+            .ok()
+            .map(|relative| root.path().join(relative))
+    }
+
     pub(crate) fn normalized_prefix_path(
         &self,
         prefix_root: Option<&Root>,
@@ -134,7 +140,18 @@ impl ToolchainAdapter for HomebrewAdapter<'_> {
     }
 
     fn probe(&self, ctx: &mut PolicyCtx<'_>) -> AdapterState {
-        probe_version(&self.layout.repository, ctx)
+        let Some(root) = self.prefix_root else {
+            return unknown_version();
+        };
+        let repository = self
+            .layout
+            .repository
+            .strip_prefix(&self.layout.prefix)
+            .map_or_else(
+                |_| self.layout.repository.clone(),
+                |relative| root.path().join(relative),
+            );
+        probe_version_in_root(root, &repository, ctx)
     }
 
     fn inventory(&self, _ctx: &mut PolicyCtx<'_>, state: &AdapterState) -> Inventory {
@@ -404,30 +421,41 @@ impl HomebrewAdapter<'_> {
 }
 
 pub fn probe_version(repository: &Path, _ctx: &mut PolicyCtx<'_>) -> AdapterState {
-    read_version(repository).map_or_else(
-        || AdapterState::Degraded {
-            observed_version: None,
-            reason: AdapterDegradedReason::UnknownVersion,
-        },
-        |version| AdapterState::Ready { version },
-    )
+    Root::open(repository)
+        .ok()
+        .and_then(|root| read_version(&root, root.path()))
+        .map_or_else(unknown_version, |version| AdapterState::Ready { version })
 }
 
-fn read_version(repository: &Path) -> Option<String> {
+fn probe_version_in_root(root: &Root, repository: &Path, _ctx: &mut PolicyCtx<'_>) -> AdapterState {
+    read_version(root, repository)
+        .map_or_else(unknown_version, |version| AdapterState::Ready { version })
+}
+
+fn unknown_version() -> AdapterState {
+    AdapterState::Degraded {
+        observed_version: None,
+        reason: AdapterDegradedReason::UnknownVersion,
+    }
+}
+
+fn read_version(root: &Root, repository: &Path) -> Option<String> {
     let git = repository.join(".git");
-    let head = std::fs::read_to_string(git.join("HEAD")).ok()?;
+    let head = read_checked(root, &git.join("HEAD"))?;
+    let head = std::str::from_utf8(&head).ok()?;
     let head = head.trim();
     let sha = if let Some(reference) = head.strip_prefix("ref: ") {
-        read_reference(&git, reference)?
+        read_reference(root, &git, reference)?
     } else {
         valid_sha(head).then(|| head.to_owned())?
     };
-    let version = std::fs::read_to_string(git.join("describe-cache").join(sha)).ok()?;
+    let version = read_checked(root, &git.join("describe-cache").join(sha))?;
+    let version = std::str::from_utf8(&version).ok()?;
     let version = version.trim();
     (!version.is_empty() && !version.chars().any(char::is_whitespace)).then(|| version.to_owned())
 }
 
-fn read_reference(git: &Path, reference: &str) -> Option<String> {
+fn read_reference(root: &Root, git: &Path, reference: &str) -> Option<String> {
     let reference_path = Path::new(reference);
     if !reference.starts_with("refs/")
         || !reference_path
@@ -436,11 +464,14 @@ fn read_reference(git: &Path, reference: &str) -> Option<String> {
     {
         return None;
     }
-    if let Ok(contents) = std::fs::read_to_string(git.join(reference_path)) {
+    if let Some(contents) = read_checked(root, &git.join(reference_path))
+        .and_then(|contents| String::from_utf8(contents).ok())
+    {
         let sha = contents.trim();
         return valid_sha(sha).then(|| sha.to_owned());
     }
-    let packed = std::fs::read_to_string(git.join("packed-refs")).ok()?;
+    let packed = read_checked(root, &git.join("packed-refs"))?;
+    let packed = std::str::from_utf8(&packed).ok()?;
     packed.lines().find_map(|line| {
         let (sha, candidate) = line.split_once(' ')?;
         (candidate == reference && valid_sha(sha)).then(|| sha.to_owned())
@@ -480,14 +511,7 @@ fn keg_identity(root: &Root, path: &Path) -> InventoryIdentity {
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     let receipt_path = path.join("INSTALL_RECEIPT.json");
-    let installed_on_request = root
-        .measure_object(&receipt_path)
-        .ok()
-        .filter(|_| {
-            std::fs::symlink_metadata(&receipt_path)
-                .is_ok_and(|metadata| metadata.file_type().is_file())
-        })
-        .and_then(|_| std::fs::read(receipt_path).ok())
+    let installed_on_request = read_checked(root, &receipt_path)
         .and_then(|contents| serde_json::from_slice::<serde_json::Value>(&contents).ok())
         .and_then(|receipt| receipt["installed_on_request"].as_bool());
     InventoryIdentity::HomebrewKeg {
@@ -495,6 +519,14 @@ fn keg_identity(root: &Root, path: &Path) -> InventoryIdentity {
         version,
         installed_on_request,
     }
+}
+
+fn read_checked(root: &Root, path: &Path) -> Option<Vec<u8>> {
+    let measured = root.measure_object(path).ok()?;
+    if measured.dataless || !std::fs::symlink_metadata(path).ok()?.file_type().is_file() {
+        return None;
+    }
+    std::fs::read(path).ok()
 }
 
 fn io_gap(path: &Path, stage: InventoryStage, error: &io::Error) -> InventoryGap {

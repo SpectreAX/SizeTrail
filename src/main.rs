@@ -12,11 +12,12 @@ use std::{fs, io};
 
 use clap::{Arg, ArgAction, Command, value_parser};
 use clap_complete::{Shell, generate};
+use sizetrail::adapters::homebrew::{discover_layout, open_prefix_root};
 use sizetrail::capacity;
 use sizetrail::fsx::Root;
 use sizetrail::model::EnvironmentEnvelope;
 use sizetrail::policy::{PolicyCtx, SIDE_EFFECT_REGISTRY};
-use sizetrail::rules::builtin_rules;
+use sizetrail::rules::{COMPILED_ADAPTER_IDS, builtin_rules};
 use sizetrail::scan::{
     excluded_adapter_report, homebrew_report, scan, unmeasurable_adapter_report, xcode_report,
     xcode_report_with_sink,
@@ -161,7 +162,14 @@ fn run() -> Result<u8, String> {
             let excludes = if no_xcode && no_homebrew {
                 Vec::new()
             } else if let Ok(scan_root) = opened.as_ref() {
-                match validate_excludes(scan_root, &root, &requested_excludes) {
+                match validate_excludes(
+                    scan_root,
+                    &root,
+                    &requested_excludes,
+                    !no_xcode,
+                    !no_homebrew,
+                    root_override.as_deref(),
+                ) {
                     Ok(excludes) => excludes,
                     Err(message) => {
                         eprintln!("sizetrail: {message}");
@@ -280,44 +288,62 @@ fn run() -> Result<u8, String> {
 }
 
 fn doctor(matches: &clap::ArgMatches, arguments: &clap::ArgMatches) -> Result<u8, String> {
-    let root = matches
-        .get_one::<PathBuf>("root")
-        .cloned()
+    let root_override = matches.get_one::<PathBuf>("root").cloned();
+    let root = root_override
+        .clone()
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .ok_or_else(|| "HOME is unavailable and --root was not supplied".to_owned())?;
     let no_xcode = arguments.get_flag("no-xcode");
+    let no_homebrew = arguments.get_flag("no-homebrew");
     let requested_excludes = arguments
         .get_many::<PathBuf>("exclude")
         .map(|values| values.cloned().collect::<Vec<_>>())
         .unwrap_or_default();
-    if no_xcode && !requested_excludes.is_empty() {
+    if no_xcode && no_homebrew && !requested_excludes.is_empty() {
         eprintln!("sizetrail: --exclude matches no enabled scan root");
         return Ok(2);
     }
     let opened = Root::open(&root);
     let root_ready = opened.is_ok();
-    let xcode = if no_xcode {
-        excluded_adapter_report("xcode")
+    let excludes = if no_xcode && no_homebrew {
+        Vec::new()
     } else if let Ok(scan_root) = opened.as_ref() {
-        let excludes = match validate_excludes(scan_root, &root, &requested_excludes) {
+        match validate_excludes(
+            scan_root,
+            &root,
+            &requested_excludes,
+            !no_xcode,
+            !no_homebrew,
+            root_override.as_deref(),
+        ) {
             Ok(excludes) => excludes,
             Err(message) => {
                 eprintln!("sizetrail: {message}");
                 return Ok(2);
             }
-        };
-        let mut ctx = PolicyCtx::for_scan();
+        }
+    } else if requested_excludes.is_empty() {
+        Vec::new()
+    } else {
+        eprintln!("sizetrail: --exclude could not be validated because root initialization failed");
+        return Ok(2);
+    };
+    let mut ctx = PolicyCtx::for_scan();
+    let homebrew = if no_homebrew {
+        excluded_adapter_report("homebrew")
+    } else if let Ok(scan_root) = opened.as_ref() {
+        homebrew_report(scan_root, &mut ctx, &excludes, root_override.as_deref())
+    } else {
+        unmeasurable_adapter_report("homebrew")
+    };
+    let xcode = if no_xcode {
+        excluded_adapter_report("xcode")
+    } else if let Ok(scan_root) = opened.as_ref() {
         xcode_report(scan_root, &mut ctx, &excludes)
     } else {
         unmeasurable_adapter_report("xcode")
     };
-    let ready = root_ready
-        && matches!(
-            xcode.status,
-            sizetrail::model::RegionStatus::Complete
-                | sizetrail::model::RegionStatus::NotPresent
-                | sizetrail::model::RegionStatus::ExcludedByUser
-        );
+    let ready = root_ready && report_is_ready(&homebrew) && report_is_ready(&xcode);
     let report = serde_json::json!({
         "schema_version": sizetrail::model::SCHEMA_VERSION,
         "tool_version": sizetrail::model::TOOL_VERSION,
@@ -329,6 +355,7 @@ fn doctor(matches: &clap::ArgMatches, arguments: &clap::ArgMatches) -> Result<u8
             "execution": "user_only",
             "caveat": "This opens the privacy settings page; it does not prove that Full Disk Access is the cause or the remedy."
         })),
+        "homebrew": homebrew,
         "xcode": xcode,
     });
     if arguments.get_flag("json") {
@@ -338,12 +365,24 @@ fn doctor(matches: &clap::ArgMatches, arguments: &clap::ArgMatches) -> Result<u8
         );
     } else {
         println!(
-            "root: {}\nxcode: {}",
+            "root: {}\nhomebrew: {}\nxcode: {}",
             report["root"]["status"].as_str().unwrap_or("unmeasurable"),
+            report["homebrew"]["status"]
+                .as_str()
+                .unwrap_or("unmeasurable"),
             report["xcode"]["status"].as_str().unwrap_or("unmeasurable")
         );
     }
     Ok(if ready { 0 } else { 3 })
+}
+
+fn report_is_ready(report: &sizetrail::scan::AdapterReport) -> bool {
+    matches!(
+        report.status,
+        sizetrail::model::RegionStatus::Complete
+            | sizetrail::model::RegionStatus::NotPresent
+            | sizetrail::model::RegionStatus::ExcludedByUser
+    )
 }
 
 fn side_effect_policy() -> Vec<serde_json::Value> {
@@ -403,12 +442,14 @@ fn explain(matches: &clap::ArgMatches, arguments: &clap::ArgMatches) -> Result<u
             document["environment"]["generated_at_unix_seconds"].as_u64(),
         );
     }
-    if !id.starts_with("f1:xcode:") {
-        return Err("finding belongs to an adapter that is not compiled".to_owned());
-    }
-    let root = matches
-        .get_one::<PathBuf>("root")
-        .cloned()
+    let adapter_id = id
+        .split(':')
+        .nth(1)
+        .filter(|adapter| COMPILED_ADAPTER_IDS.contains(adapter))
+        .ok_or_else(|| "finding belongs to an adapter that is not compiled".to_owned())?;
+    let root_override = matches.get_one::<PathBuf>("root").cloned();
+    let root = root_override
+        .clone()
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .ok_or_else(|| "HOME is unavailable and --root was not supplied".to_owned())?;
     let environment =
@@ -417,9 +458,13 @@ fn explain(matches: &clap::ArgMatches, arguments: &clap::ArgMatches) -> Result<u
     let report = match Root::open(&root) {
         Ok(scan_root) => {
             let mut ctx = PolicyCtx::for_scan();
-            xcode_report(&scan_root, &mut ctx, &[])
+            match adapter_id {
+                "homebrew" => homebrew_report(&scan_root, &mut ctx, &[], root_override.as_deref()),
+                "xcode" => xcode_report(&scan_root, &mut ctx, &[]),
+                _ => unreachable!("compiled adapter ids are matched exhaustively"),
+            }
         }
-        Err(_) => unmeasurable_adapter_report("xcode"),
+        Err(_) => unmeasurable_adapter_report(adapter_id),
     };
     let rescan_complete = report.status == sizetrail::model::RegionStatus::Complete;
     let rescan_status = report.status;
@@ -527,7 +572,16 @@ fn validate_excludes(
     root: &Root,
     requested_root: &Path,
     requested: &[PathBuf],
+    xcode_enabled: bool,
+    homebrew_enabled: bool,
+    sandbox_root: Option<&Path>,
 ) -> Result<Vec<PathBuf>, String> {
+    let layout = homebrew_enabled
+        .then(|| discover_layout(sandbox_root))
+        .flatten();
+    let prefix_root = layout
+        .as_ref()
+        .and_then(|layout| open_prefix_root(layout).ok());
     let mut excludes = Vec::new();
     for input in requested {
         if input
@@ -544,6 +598,12 @@ fn validate_excludes(
         let candidate = if input.is_absolute() {
             if let Ok(relative) = input.strip_prefix(requested_root) {
                 root.path().join(relative)
+            } else if let Some(physical) = layout
+                .as_ref()
+                .zip(prefix_root.as_ref())
+                .and_then(|(layout, prefix)| layout.physical_path_for_reported(prefix, input))
+            {
+                physical
             } else {
                 input.clone()
             }
@@ -553,22 +613,34 @@ fn validate_excludes(
         if candidate
             .components()
             .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
-            || !candidate.starts_with(root.path())
         {
             return Err(format!(
-                "exclude must be a normalized path under the scan root: {}",
+                "exclude must be a normalized path under an enabled scan root: {}",
                 input.display()
             ));
         }
-        let xcode_root = root.path().join("Library/Developer/Xcode");
-        let simulator_root = root.path().join("Library/Developer/CoreSimulator");
-        if !overlaps(&candidate, &xcode_root) && !overlaps(&candidate, &simulator_root) {
+        let prefix_owner = prefix_root
+            .as_ref()
+            .filter(|prefix| candidate.starts_with(prefix.path()));
+        let home_roots = [
+            xcode_enabled.then(|| root.path().join("Library/Developer/Xcode")),
+            xcode_enabled.then(|| root.path().join("Library/Developer/CoreSimulator")),
+            homebrew_enabled.then(|| root.path().join("Library/Caches/Homebrew")),
+            homebrew_enabled.then(|| root.path().join("Library/Logs/Homebrew")),
+        ];
+        let home_match = candidate.starts_with(root.path())
+            && home_roots
+                .iter()
+                .flatten()
+                .any(|scan_root| overlaps(&candidate, scan_root));
+        if prefix_owner.is_none() && !home_match {
             return Err(format!(
-                "exclude matches no Xcode scan root: {}",
+                "exclude matches no enabled scan root: {}",
                 input.display()
             ));
         }
-        match root.path_exists_without_descending(&candidate) {
+        let owner = prefix_owner.unwrap_or(root);
+        match owner.path_exists_without_descending(&candidate) {
             Ok(true) => excludes.push(candidate),
             Ok(false) => return Err(format!("exclude does not exist: {}", input.display())),
             Err(_) => {

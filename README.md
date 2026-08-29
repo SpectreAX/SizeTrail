@@ -34,7 +34,7 @@ is a release claim only when that release commit’s CI run is green. The API ba
 separate from hosted runtime evidence.
 
 <!-- BEGIN GENERATED: support-matrix -->
-Release: **v0.1.3 technical preview**
+Release: **v0.2.0 technical preview**
 
 API baseline: **macOS 13 best effort, not runtime-tested in hosted CI**
 

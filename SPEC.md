@@ -791,7 +791,7 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 
 **通道覆盖矩阵是 P2 起的常设交付物。** P2、P3 与 P4 完成前都必须基于阶段后代码重新推导矩阵，并为本阶段新开的通道增加行，不能只沿用上一阶段结论。P2 至少逐项列出 `fsx/sys.rs` 内每个 `extern` 声明，以及读操作诱发的系统代写；P3 至少逐项列出每个外部命令、子进程与未沙箱化 daemon 的状态变化通道；P4 继续加入每条 `simctl`、规则解析、显式报告文件读取、completion 与新增依赖的运行时通道。
 
-### 12.1 当前 P4 通道覆盖矩阵
+### 12.1 当前 P4.1 通道覆盖矩阵
 
 `静态`包含 crate-root forbid、豁免边界、Clippy 清单锁；`符号锁`包含 extern 精确集合、无直接 `libc`、无 build script、禁止 inline asm/dynamic lookup；`运行时`包含 TreeSnapshot、高价值路径兜底与 deny-write sandbox；`专用`是本行的行为/差分 fixture。`—` 表示该层不覆盖，不能据此扩张安全声明。
 
@@ -817,7 +817,13 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | autofs / mount trigger | — | — | sandbox 不证明 mount 状态 | — | `VFS_TRIGGER_RESOLVE_OFF` set+get；`EDEADLK`/失败令 root unknown |
 | nested mount 与 System/Data firmlink | — | — | — | — | 每对象比较真实 `(fsid,fileid)`，真实 fsid 改变即拒绝；synthetic boundary test |
 | store 内符号链接与 `Other` 条目 | safe 元数据读取；永不 `children` | `getattrlist` 精确符号集 | TreeSnapshot + 逐子命令 sandbox | — | Q51 Xcode fixture 断言链接只贡献自身 logical/allocated footprint；撤销为 store 级 Err 时同一测试转红。两类均复用 `Root::measure_object` 的 `FSOPT_NOFOLLOW_ANY` 路径，绝不跟随目标 |
+| Homebrew prefix 独立 `Root` | safe 路径发现后只走 `Root` API | 与 HOME Root 相同的 FFI 精确集合 | Homebrew TreeSnapshot + scan sandbox | — | Apple Silicon、Intel 与 repository Cellar fallback fixtures；HOME/prefix 分成独立 finding，测试断言不跨 Root 求和；prefix 初始化失败只降级该侧 |
+| Homebrew `.git` 版本元数据读取 | 内容打开前经 prefix `Root::measure_object`；无命令 | `getattrlist` 精确符号集 | Homebrew TreeSnapshot + scan sandbox | 0 次调用 | loose ref、detached HEAD、packed refs、出界 `.git` symlink 与缺失 describe-cache fixtures；dataless/出界/未知版本 typed degraded 但不阻断计量 |
+| Homebrew keg receipt 解析 | 先经 prefix `Root::measure_object`，再 safe read | `getattrlist` 精确符号集 | Homebrew TreeSnapshot + scan sandbox | — | fixture 只读取 `installed_on_request`；字段缺失保持 unknown，receipt 的名字与 artifact target 均不作为归因证据 |
+| Homebrew store 符号链接枚举与 link text | safe `read_link`；不 `stat`/canonicalize target | `getattrlist` 精确符号集 | Homebrew dangling-target fixture + TreeSnapshot + scan sandbox | — | Cellar/Cask cache 链接只计自身；Caskroom staged link 只作 prefix 外 gap 证据；`/Applications` 永不进入 region |
+| `brew.env` 改向 `HOMEBREW_CACHE` / `HOMEBREW_LOGS` | — | — | — | — | **未覆盖**：v0.2 不读取或解析 `brew.env`；默认 cache 缺失时发 `absent_or_changed` typed gap，不声称默认路径完整 |
 | 外部命令 / 子进程 | `Command` 仅 policy | — | sandbox 逐子命令覆盖直接进程写尝试 | 是 | registry 精确锁定六条 Xcode/CoreSimulator probe；adapter 只能提交 `ProbeId`，不能提交程序、参数或用户输入 |
+| Homebrew 外部命令 / 子进程 | `Command` 仅 policy；Homebrew 无 probe id | — | Homebrew read-only harness + scan sandbox | 精确为 0 | 完整 Homebrew inventory 后逐 registry id 断言计数仍为 0；`SIDE_EFFECT_REGISTRY` 精确集合测试锁住未新增条目 |
 | `/usr/bin/xcode-select -p` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 生产 probe 测试实际执行；只判 selection，标准 CLT → `not_present` |
 | `/usr/bin/xcodebuild -version` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 仅 selection 为完整 Xcode 候选后运行；固定 locale/清除重定向环境；未知版本降级 |
 | `/usr/bin/xcodebuild -checkFirstLaunchStatus` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 仅已验证版本运行；非零为 `not_ready`，绝不调用写入型 `-runFirstLaunch` / `-license accept` |

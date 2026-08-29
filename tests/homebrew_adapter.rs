@@ -127,6 +127,23 @@ fn missing_homebrew_version_metadata_is_an_explicit_degraded_state() {
 }
 
 #[test]
+fn version_metadata_cannot_escape_the_prefix_through_a_symlink() {
+    let fixture = tempfile::tempdir().expect("fixture prefix must be created");
+    let outside = repository_with_describe_cache();
+    write(&outside.path().join(".git/HEAD"), SHA);
+    symlink(outside.path().join(".git"), fixture.path().join(".git"))
+        .expect("out-of-root git link must be created");
+
+    assert_eq!(
+        homebrew::probe_version(fixture.path(), &mut PolicyCtx::for_scan()),
+        AdapterState::Degraded {
+            observed_version: None,
+            reason: AdapterDegradedReason::UnknownVersion,
+        }
+    );
+}
+
+#[test]
 fn apple_silicon_prefix_is_preferred_and_opened_as_its_own_root() {
     let fixture = tempfile::tempdir().expect("fixture root must be created");
     make_installation(fixture.path(), "opt/homebrew", "Cellar");
