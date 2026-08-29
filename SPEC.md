@@ -619,6 +619,10 @@ P4 编写 README 与公开文档时，数字来源断言只能按以下方向演
 
 GA runner 记录 fixture benchmark，但**只发布「该 runner image + fixture」的原始时间**，不推广成用户机器性能承诺。runner 轮换后不得把不同硬件结果直接画成趋势。
 
+因此 benchmark 资产**必须自带 runner 身份**（`ImageOS`、`ImageVersion`、架构）：它是独立发布的文件，一旦与 artifact 名分离，缺身份就无法归因也无法察觉 image 轮换（Q46）。CI 下这些变量缺失即 fail closed。
+
+**release notes 必须是仓库文件 `docs/release-notes/<tag>.md`，由 `--notes-file` 发布（Q46）。** 自动生成的 notes 不在仓库里，§9.1 的两道门禁原理上无法检查它 —— 那是把诚实寄托在维护者克制上，Q5 已否决该形态。CI contract 断言 release workflow 不含 `--generate-notes`：未被实际使用的门禁是装饰（§9.0）。
+
 ---
 
 ## 10. 测试策略

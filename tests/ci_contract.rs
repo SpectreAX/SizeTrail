@@ -44,3 +44,40 @@ fn hosted_support_claims_are_one_source_with_no_paid_large_runner() {
     assert!(workflow.contains("ci/platforms.json"));
     assert!(workflow.contains("fromJSON(needs.matrix.outputs.runtime)"));
 }
+
+/// Q46: the claim and quantitative-documentation gates scan `docs/`, so notes only fall under them
+/// if they live in the repository. Auto-generated notes exist solely on GitHub, where no gate can
+/// read them, and a gate that the release path does not use is decoration (§9.0).
+#[test]
+fn release_notes_are_a_gated_repository_file_for_this_version() {
+    let workflow = std::fs::read_to_string(".github/workflows/release.yml")
+        .expect("release workflow must be readable");
+
+    assert!(
+        !workflow.contains("--generate-notes"),
+        "auto-generated notes are public prose no gate can read"
+    );
+    assert!(
+        workflow.contains("--notes-file"),
+        "the release must publish notes from the gated repository file"
+    );
+    assert!(
+        workflow.contains("docs/release-notes/"),
+        "notes must live under a directory the claim gate already scans"
+    );
+
+    let notes = std::path::Path::new("docs/release-notes")
+        .join(format!("v{}.md", env!("CARGO_PKG_VERSION")));
+    assert!(
+        notes.is_file(),
+        "{} must exist before this version can be released",
+        notes.display()
+    );
+    assert!(
+        !std::fs::read_to_string(&notes)
+            .expect("notes must be readable")
+            .trim()
+            .is_empty(),
+        "empty notes would satisfy the gate while telling users nothing"
+    );
+}

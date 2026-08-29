@@ -990,6 +990,42 @@ Q44 的 lane 首轮就给出了证据（2026-08-29，hosted runner）：
 
 ---
 
+## Q46 — 发布面的两个未受检出口
+
+v0.1.0 发布后审计发现两处公开出口不在任何机械检查范围内。两者都不是漏写代码，而是**声明与门禁的覆盖边界**问题。
+
+### benchmark 资产缺 runner 身份
+
+§9.4 的口径是「只发布该 runner image + fixture 的原始时间」，但发布出去的 `xcode-fixture-benchmark.json` 只有 `scope` 与中位数，没有 runner image。资产是独立发布的，一旦与 artifact 文件名分离，消费者既无法归因也无法察觉 image 轮换 —— 那正是 §9.4 要防的把不同硬件画成趋势。
+
+**决策：benchmark 脚本把 runner 身份（`ImageOS`、`ImageVersion`、架构）合入 JSON；在 CI 下这些变量缺失即 fail closed。** 本地运行记为未标识主机，因为本地产物不进发布。
+
+### release notes 是未受检的公开文案
+
+`gh release create --generate-notes` 产生自动 changelog，`check-claim-patterns.sh` 与 `check-quantitative-docs.sh` 都扫不到它 —— **不是扫描漏了，而是那段文案根本不在仓库里，原理上无法被检查。** 这与 Q5 明确否决的形态相同：把诚实寄托在维护者克制上，而不是可审核契约。
+
+**决策：release notes 成为仓库文件 `docs/release-notes/<tag>.md`，由 `--notes-file` 发布。** 两道门禁本就扫描 `docs/`，因此纳入是自动的。另加 CI contract 断言 release workflow **不含** `--generate-notes` —— 门禁若没被实际使用就是装饰，这是 §9.0 的同一条纪律。
+
+被否：CI 里通过 API 抓取 release notes 再检查（需要网络、不可复现，且是事后的）；保留 `--generate-notes` 并靠人工复核（Q5 已否决）；把 runner 身份留在 artifact 文件名里（资产独立发布后即丢失）。
+
+影响：`SPEC.md` §9.1、§9.4；`scripts/benchmark-xcode-fixture.sh`；`.github/workflows/release.yml`；`tests/ci_contract.rs`；新增 `docs/release-notes/`。
+
+---
+
+## Q47 — v0.1.0 的漏报缺陷如何对外表述
+
+已公开的 v0.1.0 含一个通配展开缺陷：`expand_home_pattern` 在 `*` 组件匹配到非目录条目时整个展开 `return Err`，使该类别的全部 store 消失。发布提交 `acee2ab` 的暴露面是 `DerivedData/*/Build`、`Archives/*`、`iOS DeviceSupport/*` 三条规则 —— 只要这些目录里有一个散落文件（`.DS_Store` 最现实），整个类别被一条 `traversal_failed` gap 取代。机制已由 hosted lane 实测（`device_set.plist` 让 132 个 device set 全部丢失）。
+
+**它诚实地失败**：带 typed gap、region 记 `unmeasurable`、退出 3，不输出错误数字，不构成 truth contract 违规。但对一个价值全部在于归因的工具，静默漏报整个类别是实质缺陷。
+
+**决策：切 v0.1.1，并在 v0.1.0 的 release notes 上补一段说明。** 不静默以新版取代旧版 —— 已下载 v0.1.0 的人不会因为出了新 tag 就知道自己手里的二进制会漏报。这与「不隐藏未知」是同一条要求，只是作用在已发布产物上。
+
+被否：只切新版不动旧 notes（把发现留在 commit 历史里，等于要求用户读 git log）；不发补丁累积到下一版（延长已知漏报的暴露期）；把它表述为「改进」而非缺陷（弱化真实影响）。
+
+影响：`Cargo.toml`、`ci/platforms.json` 版本；`docs/release-notes/`。
+
+---
+
 ## 附录 A — 实测环境基线
 
 采集于 2026-08-26，作为规则表量级参考与回归基线：

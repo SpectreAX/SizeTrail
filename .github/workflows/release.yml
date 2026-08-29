@@ -60,11 +60,17 @@ jobs:
       - name: Record release benchmark
         run: bash scripts/benchmark-xcode-fixture.sh
 
+      # Notes are published from a repository file so that the claim and quantitative-documentation
+      # gates can actually read them. Auto-generated notes live only on GitHub and are therefore
+      # unreviewable by any gate (Q46).
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
+          notes="docs/release-notes/${RELEASE_TAG}.md"
+          test -f "$notes"
           gh release create "$RELEASE_TAG" \
             dist/*.tar.gz dist/SHA256SUMS artifacts/xcode-fixture-benchmark.json \
-            --verify-tag --generate-notes --title "SizeTrail ${RELEASE_TAG} technical preview"
+            --verify-tag --notes-file "$notes" \
+            --title "SizeTrail ${RELEASE_TAG} technical preview"
