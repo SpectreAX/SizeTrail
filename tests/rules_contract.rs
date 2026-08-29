@@ -52,10 +52,24 @@ fn every_builtin_rule_has_evidence_paths_adapter_and_fixture() {
 }
 
 fn fixture_path_matches(pattern: &str, path: &str) -> bool {
-    let Some((prefix, suffix)) = pattern.split_once('*') else {
+    let Some((prefix, _)) = pattern.split_once('*') else {
         return pattern == path;
     };
-    path.starts_with(prefix) && path.ends_with(suffix)
+    let Some(mut remaining) = path.strip_prefix(prefix) else {
+        return false;
+    };
+    let parts = pattern.split('*').skip(1).collect::<Vec<_>>();
+    for (index, part) in parts.iter().enumerate() {
+        let last = index + 1 == parts.len();
+        if last && !pattern.ends_with('*') {
+            return remaining.ends_with(part);
+        }
+        let Some(position) = remaining.find(part) else {
+            return false;
+        };
+        remaining = &remaining[position + part.len()..];
+    }
+    true
 }
 
 #[test]
@@ -84,4 +98,42 @@ fn arbitrary_commands_are_not_part_of_the_rule_schema() {
         sizetrail::rules::parse(&mutated),
         Err(RuleError::UnknownField)
     );
+}
+
+#[test]
+fn homebrew_rules_cover_only_the_eight_decided_store_classes() {
+    let rules = builtin_rules().expect("compiled rules must parse and validate");
+    let homebrew = rules
+        .iter()
+        .filter(|rule| rule.adapter == "homebrew")
+        .collect::<Vec<_>>();
+    assert_eq!(COMPILED_ADAPTER_IDS, ["homebrew", "xcode"]);
+    assert_eq!(
+        homebrew
+            .iter()
+            .map(|rule| rule.id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "homebrew.cache_api",
+            "homebrew.cache_bootsnap",
+            "homebrew.cache_build_tools",
+            "homebrew.cache_downloads",
+            "homebrew.caskroom",
+            "homebrew.cellar",
+            "homebrew.logs",
+            "homebrew.taps",
+        ])
+    );
+    let logs = homebrew
+        .iter()
+        .find(|rule| rule.id == "homebrew.logs")
+        .expect("logs rule must exist");
+    assert!(logs.evidence.contains("user state"));
+    assert!(logs.evidence.contains("cannot be regenerated"));
+    let cellar = homebrew
+        .iter()
+        .find(|rule| rule.id == "homebrew.cellar")
+        .expect("Cellar rule must exist");
+    assert!(cellar.evidence.contains("installed software"));
+    assert!(!cellar.evidence.contains("reclaim"));
 }

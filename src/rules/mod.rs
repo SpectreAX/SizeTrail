@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+const BUILTIN_HOMEBREW: &str = include_str!("builtin/homebrew.toml");
 const BUILTIN_XCODE: &str = include_str!("builtin/xcode.toml");
 
-pub const COMPILED_ADAPTER_IDS: &[&str] = &["xcode"];
+pub const COMPILED_ADAPTER_IDS: &[&str] = &["homebrew", "xcode"];
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -106,7 +107,9 @@ pub enum RuleError {
 }
 
 pub fn builtin_rules() -> Result<Vec<Rule>, RuleError> {
-    parse(BUILTIN_XCODE)
+    let mut rules = parse(BUILTIN_HOMEBREW)?;
+    rules.extend(parse(BUILTIN_XCODE)?);
+    Ok(rules)
 }
 
 pub fn parse(source: &str) -> Result<Vec<Rule>, RuleError> {

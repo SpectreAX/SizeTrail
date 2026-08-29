@@ -1,0 +1,1 @@
+{"rule_id":"homebrew.logs","mechanism":"user_owned","recoverability":"unrecoverable","sensitivity":"medium","expected_path":"~/Library/Logs/Homebrew"}

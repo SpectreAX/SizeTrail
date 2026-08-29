@@ -1,0 +1,1 @@
+{"rule_id":"homebrew.cache_api","mechanism":"generated","recoverability":"redownload_bandwidth","sensitivity":"low","expected_path":"~/Library/Caches/Homebrew/api"}

@@ -1,0 +1,1 @@
+{"rule_id":"homebrew.cache_bootsnap","mechanism":"generated","recoverability":"rebuild_time_cost","sensitivity":"low","expected_path":"~/Library/Caches/Homebrew/bootsnap"}

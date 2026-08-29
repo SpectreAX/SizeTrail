@@ -1,0 +1,1 @@
+{"rule_id":"homebrew.cellar","mechanism":"vendor_managed","recoverability":"redownload_bandwidth","sensitivity":"medium","expected_path":"$CELLAR/formula/1.0"}
