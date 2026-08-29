@@ -166,6 +166,9 @@ const fn coverage_reason(reason: InventoryGapReason) -> CoverageGapReason {
         InventoryGapReason::ProbeFailed => CoverageGapReason::ProbeFailed,
         InventoryGapReason::TraversalFailed => CoverageGapReason::TraversalFailed,
         InventoryGapReason::InvalidToolOutput => CoverageGapReason::InvalidToolOutput,
+        InventoryGapReason::CoreSimulatorVersionMismatch => {
+            CoverageGapReason::CoreSimulatorVersionMismatch
+        }
         InventoryGapReason::RuntimeSizeUnavailable => CoverageGapReason::RuntimeSizeUnavailable,
         InventoryGapReason::TimedOut => CoverageGapReason::TimedOut,
         InventoryGapReason::RuleSetInvalid => CoverageGapReason::RuleSetInvalid,
@@ -186,6 +189,7 @@ const fn gap_reason_id(reason: InventoryGapReason) -> &'static str {
         InventoryGapReason::ProbeFailed => "probe_failed",
         InventoryGapReason::TraversalFailed => "traversal_failed",
         InventoryGapReason::InvalidToolOutput => "invalid_tool_output",
+        InventoryGapReason::CoreSimulatorVersionMismatch => "core_simulator_version_mismatch",
         InventoryGapReason::RuntimeSizeUnavailable => "runtime_size_unavailable",
         InventoryGapReason::TimedOut => "timed_out",
         InventoryGapReason::RuleSetInvalid => "rule_set_invalid",

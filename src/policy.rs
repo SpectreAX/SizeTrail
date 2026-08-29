@@ -42,6 +42,7 @@ pub struct ReadOnlyCommand {
 pub const XCODE_SELECT_DEVELOPER_DIR: ProbeId = ProbeId::new("xcode.select_developer_dir");
 pub const XCODE_XCODEBUILD_VERSION: ProbeId = ProbeId::new("xcode.xcodebuild_version");
 pub const XCODE_FIRST_LAUNCH_STATUS: ProbeId = ProbeId::new("xcode.first_launch_status");
+pub const XCODE_CORE_SIMULATOR_VERSION: ProbeId = ProbeId::new("xcode.core_simulator_version");
 pub const XCODE_SIMCTL_DEVICES: ProbeId = ProbeId::new("xcode.simctl_devices");
 pub const XCODE_SIMCTL_RUNTIMES: ProbeId = ProbeId::new("xcode.simctl_runtimes");
 
@@ -56,11 +57,9 @@ const XCODE_REMOVED_ENVIRONMENT: &[&str] = &[
     "xcrun_log",
     "xcrun_verbose",
 ];
-const SIMCTL_SIDE_EFFECTS: &[&str] = &[
-    "xcrun_may_create_or_refresh_resolver_cache_in_darwin_user_temp_dir",
-    "xcrun_may_access_the_controlling_terminal",
-    "simctl_may_start_or_connect_coresimulator_services",
-];
+const SIMCTL_SIDE_EFFECTS: &[&str] = &["simctl_may_start_or_connect_coresimulator_services"];
+const CORE_SIMULATOR_BINARY: &str =
+    "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simctl";
 
 pub const SIDE_EFFECT_REGISTRY: &[ProbePolicy] = &[
     ProbePolicy {
@@ -103,13 +102,30 @@ pub const SIDE_EFFECT_REGISTRY: &[ProbePolicy] = &[
         },
     },
     ProbePolicy {
+        id: XCODE_CORE_SIMULATOR_VERSION,
+        max_calls_per_scan: 1,
+        disable_env: "SIZETRAIL_NO_XCODE_PROBE",
+        known_side_effects: &[],
+        command: ReadOnlyCommand {
+            program: "/usr/libexec/PlistBuddy",
+            arguments: &[
+                "-c",
+                "Print :CFBundleVersion",
+                "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/Info.plist",
+            ],
+            environment: XCODE_PROBE_ENVIRONMENT,
+            remove_environment: XCODE_REMOVED_ENVIRONMENT,
+            timeout_millis: 10_000,
+        },
+    },
+    ProbePolicy {
         id: XCODE_SIMCTL_DEVICES,
         max_calls_per_scan: 1,
         disable_env: "SIZETRAIL_NO_XCODE_PROBE",
         known_side_effects: SIMCTL_SIDE_EFFECTS,
         command: ReadOnlyCommand {
-            program: "/usr/bin/xcrun",
-            arguments: &["simctl", "list", "--json", "devices"],
+            program: CORE_SIMULATOR_BINARY,
+            arguments: &["list", "--json", "devices"],
             environment: XCODE_PROBE_ENVIRONMENT,
             remove_environment: XCODE_REMOVED_ENVIRONMENT,
             timeout_millis: 30_000,
@@ -121,8 +137,8 @@ pub const SIDE_EFFECT_REGISTRY: &[ProbePolicy] = &[
         disable_env: "SIZETRAIL_NO_XCODE_PROBE",
         known_side_effects: SIMCTL_SIDE_EFFECTS,
         command: ReadOnlyCommand {
-            program: "/usr/bin/xcrun",
-            arguments: &["simctl", "list", "--json", "runtimes"],
+            program: CORE_SIMULATOR_BINARY,
+            arguments: &["list", "--json", "runtimes"],
             environment: XCODE_PROBE_ENVIRONMENT,
             remove_environment: XCODE_REMOVED_ENVIRONMENT,
             timeout_millis: 30_000,
@@ -326,14 +342,14 @@ impl<'a> InvocationTracker<'a> {
 mod tests {
     use super::{
         InvocationTracker, PolicyError, ProbeId, ProbePolicy, ReadOnlyCommand,
-        SIDE_EFFECT_REGISTRY, XCODE_FIRST_LAUNCH_STATUS, XCODE_PROBE_ENVIRONMENT,
-        XCODE_REMOVED_ENVIRONMENT, XCODE_SELECT_DEVELOPER_DIR, XCODE_SIMCTL_DEVICES,
-        XCODE_SIMCTL_RUNTIMES, XCODE_XCODEBUILD_VERSION,
+        SIDE_EFFECT_REGISTRY, XCODE_CORE_SIMULATOR_VERSION, XCODE_FIRST_LAUNCH_STATUS,
+        XCODE_PROBE_ENVIRONMENT, XCODE_REMOVED_ENVIRONMENT, XCODE_SELECT_DEVELOPER_DIR,
+        XCODE_SIMCTL_DEVICES, XCODE_SIMCTL_RUNTIMES, XCODE_XCODEBUILD_VERSION,
     };
 
     #[test]
     fn production_registry_is_the_exact_reviewed_xcode_probe_set() {
-        assert_eq!(SIDE_EFFECT_REGISTRY.len(), 5);
+        assert_eq!(SIDE_EFFECT_REGISTRY.len(), 6);
         assert_eq!(SIDE_EFFECT_REGISTRY[0].id, XCODE_SELECT_DEVELOPER_DIR);
         assert_eq!(SIDE_EFFECT_REGISTRY[0].max_calls_per_scan, 1);
         assert_eq!(
@@ -358,29 +374,45 @@ mod tests {
             SIDE_EFFECT_REGISTRY[2].command.arguments,
             ["-checkFirstLaunchStatus"]
         );
-        assert_eq!(SIDE_EFFECT_REGISTRY[3].id, XCODE_SIMCTL_DEVICES);
-        assert_eq!(SIDE_EFFECT_REGISTRY[3].command.program, "/usr/bin/xcrun");
+        assert_eq!(SIDE_EFFECT_REGISTRY[3].id, XCODE_CORE_SIMULATOR_VERSION);
+        assert_eq!(SIDE_EFFECT_REGISTRY[3].max_calls_per_scan, 1);
+        assert_eq!(
+            SIDE_EFFECT_REGISTRY[3].command.program,
+            "/usr/libexec/PlistBuddy"
+        );
         assert_eq!(
             SIDE_EFFECT_REGISTRY[3].command.arguments,
-            ["simctl", "list", "--json", "devices"]
-        );
-        assert_eq!(
-            SIDE_EFFECT_REGISTRY[3].known_side_effects,
             [
-                "xcrun_may_create_or_refresh_resolver_cache_in_darwin_user_temp_dir",
-                "xcrun_may_access_the_controlling_terminal",
-                "simctl_may_start_or_connect_coresimulator_services",
+                "-c",
+                "Print :CFBundleVersion",
+                "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/Info.plist",
             ]
         );
-        assert_eq!(SIDE_EFFECT_REGISTRY[4].id, XCODE_SIMCTL_RUNTIMES);
-        assert_eq!(SIDE_EFFECT_REGISTRY[4].command.program, "/usr/bin/xcrun");
+        assert_eq!(SIDE_EFFECT_REGISTRY[4].id, XCODE_SIMCTL_DEVICES);
+        assert_eq!(
+            SIDE_EFFECT_REGISTRY[4].command.program,
+            "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simctl"
+        );
         assert_eq!(
             SIDE_EFFECT_REGISTRY[4].command.arguments,
-            ["simctl", "list", "--json", "runtimes"]
+            ["list", "--json", "devices"]
         );
         assert_eq!(
             SIDE_EFFECT_REGISTRY[4].known_side_effects,
-            SIDE_EFFECT_REGISTRY[3].known_side_effects
+            ["simctl_may_start_or_connect_coresimulator_services"]
+        );
+        assert_eq!(SIDE_EFFECT_REGISTRY[5].id, XCODE_SIMCTL_RUNTIMES);
+        assert_eq!(
+            SIDE_EFFECT_REGISTRY[5].command.program,
+            SIDE_EFFECT_REGISTRY[4].command.program
+        );
+        assert_eq!(
+            SIDE_EFFECT_REGISTRY[5].command.arguments,
+            ["list", "--json", "runtimes"]
+        );
+        assert_eq!(
+            SIDE_EFFECT_REGISTRY[5].known_side_effects,
+            SIDE_EFFECT_REGISTRY[4].known_side_effects
         );
         for policy in SIDE_EFFECT_REGISTRY {
             assert_eq!(policy.command.environment, XCODE_PROBE_ENVIRONMENT);

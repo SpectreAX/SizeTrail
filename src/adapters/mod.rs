@@ -100,6 +100,7 @@ pub enum InventoryGapReason {
     ProbeFailed,
     TraversalFailed,
     InvalidToolOutput,
+    CoreSimulatorVersionMismatch,
     RuntimeSizeUnavailable,
     TimedOut,
     RuleSetInvalid,
@@ -158,7 +159,10 @@ pub trait ToolchainAdapter {
 
 #[cfg(test)]
 mod tests {
-    use super::{AdapterDegradedReason, AdapterState, InventoryGapReason, ToolchainAdapter, xcode};
+    use super::{
+        AdapterDegradedReason, AdapterState, InventoryGapReason, InventoryStage, ToolchainAdapter,
+        xcode,
+    };
     use crate::fsx::Root;
     use crate::policy::{PolicyCtx, ProbePolicy, ReadOnlyCommand};
 
@@ -248,34 +252,52 @@ mod tests {
 
     const DEVICES_JSON: &str = r#"{"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-17-4":[{"dataPath":"/Users/test/Library/Developer/CoreSimulator/Devices/11111111-1111-1111-1111-111111111111/data","udid":"11111111-1111-1111-1111-111111111111","isAvailable":true,"deviceTypeIdentifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-15","state":"Shutdown","name":"iPhone 15","futureKey":{"ignore":true}}]}}"#;
     const RUNTIMES_JSON: &str = r#"{"runtimes":[{"bundlePath":"/Library/Developer/CoreSimulator/Volumes/iOS_21E213/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 17.4.simruntime","buildversion":"21E213","identifier":"com.apple.CoreSimulator.SimRuntime.iOS-17-4","version":"17.4","isAvailable":true,"name":"iOS 17.4"}]}"#;
-    const INVENTORY_POLICIES: &[ProbePolicy] = &[
-        ProbePolicy {
-            id: xcode::SIMCTL_DEVICES,
-            max_calls_per_scan: 1,
-            disable_env: "SIZETRAIL_NO_XCODE_PROBE_FIXTURE",
-            known_side_effects: &[],
-            command: ReadOnlyCommand {
-                program: "/usr/bin/printf",
-                arguments: &[DEVICES_JSON],
-                environment: &[],
-                remove_environment: &[],
-                timeout_millis: 10_000,
+    const MATCHED_CORE_SIMULATOR: &[&str] = &["1010.15\n"];
+    const MISMATCHED_CORE_SIMULATOR: &[&str] = &["1051.17.8\n"];
+
+    fn inventory_policies(core_simulator_version: &'static [&'static str]) -> [ProbePolicy; 3] {
+        [
+            ProbePolicy {
+                id: xcode::CORE_SIMULATOR_VERSION,
+                max_calls_per_scan: 1,
+                disable_env: "SIZETRAIL_NO_XCODE_PROBE_FIXTURE",
+                known_side_effects: &[],
+                command: ReadOnlyCommand {
+                    program: "/usr/bin/printf",
+                    arguments: core_simulator_version,
+                    environment: &[],
+                    remove_environment: &[],
+                    timeout_millis: 10_000,
+                },
             },
-        },
-        ProbePolicy {
-            id: xcode::SIMCTL_RUNTIMES,
-            max_calls_per_scan: 1,
-            disable_env: "SIZETRAIL_NO_XCODE_PROBE_FIXTURE",
-            known_side_effects: &[],
-            command: ReadOnlyCommand {
-                program: "/usr/bin/printf",
-                arguments: &[RUNTIMES_JSON],
-                environment: &[],
-                remove_environment: &[],
-                timeout_millis: 10_000,
+            ProbePolicy {
+                id: xcode::SIMCTL_DEVICES,
+                max_calls_per_scan: 1,
+                disable_env: "SIZETRAIL_NO_XCODE_PROBE_FIXTURE",
+                known_side_effects: &[],
+                command: ReadOnlyCommand {
+                    program: "/usr/bin/printf",
+                    arguments: &[DEVICES_JSON],
+                    environment: &[],
+                    remove_environment: &[],
+                    timeout_millis: 10_000,
+                },
             },
-        },
-    ];
+            ProbePolicy {
+                id: xcode::SIMCTL_RUNTIMES,
+                max_calls_per_scan: 1,
+                disable_env: "SIZETRAIL_NO_XCODE_PROBE_FIXTURE",
+                known_side_effects: &[],
+                command: ReadOnlyCommand {
+                    program: "/usr/bin/printf",
+                    arguments: &[RUNTIMES_JSON],
+                    environment: &[],
+                    remove_environment: &[],
+                    timeout_millis: 10_000,
+                },
+            },
+        ]
+    }
 
     fn fixture_home() -> std::path::PathBuf {
         std::fs::canonicalize(
@@ -324,16 +346,39 @@ mod tests {
         );
         if std::env::var_os("GITHUB_ACTIONS").is_some() {
             assert!(
-                matches!(
-                    state,
-                    AdapterState::Ready { .. }
-                        | AdapterState::Degraded {
-                            reason: AdapterDegradedReason::NotReady,
-                            ..
-                        }
-                ),
+                matches!(state, AdapterState::Ready { .. }),
                 "the hosted runner Xcode version must be in the reviewed set: {state:?}"
             );
+
+            let home = fixture_home();
+            let root = Root::open(&home).expect("hosted inventory fixture must initialize");
+            let adapter = xcode::XcodeAdapter::new(&root, &[], Ok(false));
+            let inventory = adapter.inventory(&mut ctx, &state);
+            let version_mismatch = inventory
+                .gaps
+                .iter()
+                .any(|gap| gap.reason == InventoryGapReason::CoreSimulatorVersionMismatch);
+
+            assert_eq!(ctx.count(xcode::CORE_SIMULATOR_VERSION), 1);
+            if version_mismatch {
+                assert_eq!(ctx.count(xcode::SIMCTL_DEVICES), 0);
+                assert_eq!(ctx.count(xcode::SIMCTL_RUNTIMES), 0);
+            } else {
+                assert_eq!(ctx.count(xcode::SIMCTL_DEVICES), 1);
+                assert_eq!(ctx.count(xcode::SIMCTL_RUNTIMES), 1);
+                assert!(
+                    inventory.gaps.iter().all(|gap| {
+                        !matches!(
+                            gap.reason,
+                            InventoryGapReason::ProbeFailed | InventoryGapReason::InvalidToolOutput
+                        ) || !matches!(
+                            gap.stage,
+                            Some(InventoryStage::SimctlDevices | InventoryStage::SimctlRuntimes)
+                        )
+                    }),
+                    "matching hosted CoreSimulator must execute and parse the direct binary"
+                );
+            }
         }
     }
 
@@ -345,7 +390,8 @@ mod tests {
         let state = AdapterState::Ready {
             version: "16.4 (16F6)".to_owned(),
         };
-        let mut ctx = PolicyCtx::for_test(INVENTORY_POLICIES);
+        let policies = inventory_policies(MATCHED_CORE_SIMULATOR);
+        let mut ctx = PolicyCtx::for_test(&policies);
 
         let inventory = adapter.inventory(&mut ctx, &state);
         let rule_ids = inventory
@@ -406,6 +452,36 @@ mod tests {
     }
 
     #[test]
+    fn a_coresimulator_version_mismatch_keeps_static_inventory_but_never_calls_simctl() {
+        let home = fixture_home();
+        let root = Root::open(&home).expect("fixture root must initialize");
+        let adapter = xcode::XcodeAdapter::new(&root, &[], Ok(false));
+        let state = AdapterState::Ready {
+            version: "16.4 (16F6)".to_owned(),
+        };
+        let policies = inventory_policies(MISMATCHED_CORE_SIMULATOR);
+        let mut ctx = PolicyCtx::for_test(&policies);
+
+        let inventory = adapter.inventory(&mut ctx, &state);
+
+        assert!(
+            inventory
+                .items
+                .iter()
+                .any(|item| item.rule_id == "xcode.derived_data_build")
+        );
+        assert!(
+            inventory
+                .gaps
+                .iter()
+                .any(|gap| { gap.reason == InventoryGapReason::CoreSimulatorVersionMismatch })
+        );
+        assert_eq!(ctx.count(xcode::CORE_SIMULATOR_VERSION), 1);
+        assert_eq!(ctx.count(xcode::SIMCTL_DEVICES), 0);
+        assert_eq!(ctx.count(xcode::SIMCTL_RUNTIMES), 0);
+    }
+
+    #[test]
     fn degraded_xcode_never_starts_coresimulator_inventory() {
         let fixture = tempfile::tempdir().expect("fixture root must be created");
         let home = std::fs::canonicalize(fixture.path()).expect("fixture must canonicalize");
@@ -415,7 +491,8 @@ mod tests {
             observed_version: Some("999.0 (Fixture)".to_owned()),
             reason: AdapterDegradedReason::UnknownVersion,
         };
-        let mut ctx = PolicyCtx::for_test(INVENTORY_POLICIES);
+        let policies = inventory_policies(MATCHED_CORE_SIMULATOR);
+        let mut ctx = PolicyCtx::for_test(&policies);
 
         let inventory = adapter.inventory(&mut ctx, &state);
 
@@ -434,7 +511,8 @@ mod tests {
         let state = AdapterState::Ready {
             version: "16.4 (16F6)".to_owned(),
         };
-        let mut ctx = PolicyCtx::for_test(INVENTORY_POLICIES);
+        let policies = inventory_policies(MATCHED_CORE_SIMULATOR);
+        let mut ctx = PolicyCtx::for_test(&policies);
 
         let inventory = adapter.inventory(&mut ctx, &state);
 
@@ -462,8 +540,9 @@ mod tests {
         let state = AdapterState::Ready {
             version: "16.4 (16F6)".to_owned(),
         };
-        let mut first_ctx = PolicyCtx::for_test(INVENTORY_POLICIES);
-        let mut second_ctx = PolicyCtx::for_test(INVENTORY_POLICIES);
+        let policies = inventory_policies(MATCHED_CORE_SIMULATOR);
+        let mut first_ctx = PolicyCtx::for_test(&policies);
+        let mut second_ctx = PolicyCtx::for_test(&policies);
 
         let first = adapter
             .classify(&adapter.inventory(&mut first_ctx, &state))
@@ -486,7 +565,8 @@ mod tests {
             version: "16.4 (16F6)".to_owned(),
         };
         let with_snapshots = xcode::XcodeAdapter::new(&root, &[], Ok(true));
-        let mut ctx = PolicyCtx::for_test(INVENTORY_POLICIES);
+        let policies = inventory_policies(MATCHED_CORE_SIMULATOR);
+        let mut ctx = PolicyCtx::for_test(&policies);
         let inventory = with_snapshots.inventory(&mut ctx, &state);
         assert!(inventory.items.iter().any(|item| {
             item.observations
@@ -495,7 +575,7 @@ mod tests {
         }));
 
         let unavailable = xcode::XcodeAdapter::new(&root, &[], Err(None));
-        let mut ctx = PolicyCtx::for_test(INVENTORY_POLICIES);
+        let mut ctx = PolicyCtx::for_test(&policies);
         let inventory = unavailable.inventory(&mut ctx, &state);
         assert!(
             inventory
@@ -515,8 +595,9 @@ mod tests {
             version: "16.4 (16F6)".to_owned(),
         };
         let mut samples = Vec::new();
+        let policies = inventory_policies(MATCHED_CORE_SIMULATOR);
         for _ in 0..5 {
-            let mut ctx = PolicyCtx::for_test(INVENTORY_POLICIES);
+            let mut ctx = PolicyCtx::for_test(&policies);
             let started = std::time::Instant::now();
             let inventory = adapter.inventory(&mut ctx, &state);
             let elapsed = started.elapsed().as_nanos();

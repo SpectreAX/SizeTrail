@@ -374,6 +374,7 @@ pub enum CoverageGapReason {
     ProbeFailed,
     TraversalFailed,
     InvalidToolOutput,
+    CoreSimulatorVersionMismatch,
     RuntimeSizeUnavailable,
     TimedOut,
     RuleSetInvalid,

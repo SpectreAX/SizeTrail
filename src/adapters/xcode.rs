@@ -17,14 +17,16 @@ use crate::model::{
     StorageSignal, estimate_disposition, finding_id, normalize_findings, normalized_report_path,
 };
 use crate::policy::{
-    PolicyCtx, PolicyError, ProbeId, XCODE_FIRST_LAUNCH_STATUS, XCODE_SELECT_DEVELOPER_DIR,
-    XCODE_SIMCTL_DEVICES, XCODE_SIMCTL_RUNTIMES, XCODE_XCODEBUILD_VERSION,
+    PolicyCtx, PolicyError, ProbeId, XCODE_CORE_SIMULATOR_VERSION, XCODE_FIRST_LAUNCH_STATUS,
+    XCODE_SELECT_DEVELOPER_DIR, XCODE_SIMCTL_DEVICES, XCODE_SIMCTL_RUNTIMES,
+    XCODE_XCODEBUILD_VERSION,
 };
 use crate::rules::builtin_rules;
 
 pub const SELECT_DEVELOPER_DIR: ProbeId = XCODE_SELECT_DEVELOPER_DIR;
 pub const XCODEBUILD_VERSION: ProbeId = XCODE_XCODEBUILD_VERSION;
 pub const FIRST_LAUNCH_STATUS: ProbeId = XCODE_FIRST_LAUNCH_STATUS;
+pub const CORE_SIMULATOR_VERSION: ProbeId = XCODE_CORE_SIMULATOR_VERSION;
 pub const SIMCTL_DEVICES: ProbeId = XCODE_SIMCTL_DEVICES;
 pub const SIMCTL_RUNTIMES: ProbeId = XCODE_SIMCTL_RUNTIMES;
 
@@ -169,6 +171,20 @@ impl XcodeAdapter<'_> {
             }
         };
         visit(static_inventory);
+
+        if let Err(reason) = core_simulator_compatible(ctx, state) {
+            visit(Inventory {
+                gaps: vec![InventoryGap {
+                    region: "xcode.simulator_inventory",
+                    path: None,
+                    reason,
+                    stage: Some(InventoryStage::ToolchainProbe),
+                    errno: None,
+                }],
+                ..Inventory::default()
+            });
+            return;
+        }
 
         let mut devices = Inventory::default();
         self.inventory_devices(ctx, &mut devices);
@@ -794,8 +810,37 @@ fn record_warning(stderr: &[u8], inventory: &mut Inventory) {
     }
 }
 
-const VERIFIED_VERSIONS: &[(&str, &str)] =
-    &[("16.4", "16F6"), ("26.6", "17F113"), ("27.0", "27A5228h")];
+const VERIFIED_VERSIONS: &[(&str, &str, &str)] = &[
+    ("16.4", "16F6", "1010.15"),
+    ("26.6", "17F113", "1051.55"),
+    ("27.0", "27A5228h", "1169.1"),
+];
+
+fn core_simulator_compatible(
+    ctx: &mut PolicyCtx<'_>,
+    state: &AdapterState,
+) -> Result<(), InventoryGapReason> {
+    let AdapterState::Ready { version } = state else {
+        return Err(InventoryGapReason::UnknownVersion);
+    };
+    let expected = VERIFIED_VERSIONS
+        .iter()
+        .find_map(|(xcode, build, core_simulator)| {
+            (version == &format!("{xcode} ({build})")).then_some(*core_simulator)
+        })
+        .ok_or(InventoryGapReason::UnknownVersion)?;
+    let output = ctx.run(CORE_SIMULATOR_VERSION).map_err(policy_gap)?;
+    if !output.success {
+        return Err(InventoryGapReason::ProbeFailed);
+    }
+    let observed = std::str::from_utf8(&output.stdout)
+        .map_err(|_| InventoryGapReason::InvalidToolOutput)?
+        .trim();
+    if observed != expected {
+        return Err(InventoryGapReason::CoreSimulatorVersionMismatch);
+    }
+    Ok(())
+}
 
 pub fn probe(ctx: &mut PolicyCtx<'_>) -> AdapterState {
     let selected = match ctx.run(SELECT_DEVELOPER_DIR) {
@@ -838,10 +883,17 @@ pub fn probe(ctx: &mut PolicyCtx<'_>) -> AdapterState {
         .next()
         .and_then(|line| line.strip_prefix("Build version "))
         .map(str::to_owned);
-    let verified = version_number
-        .as_deref()
-        .zip(build.as_deref())
-        .is_some_and(|pair| VERIFIED_VERSIONS.contains(&pair));
+    let verified =
+        version_number
+            .as_deref()
+            .zip(build.as_deref())
+            .is_some_and(|(version, build)| {
+                VERIFIED_VERSIONS
+                    .iter()
+                    .any(|(known_version, known_build, _)| {
+                        version == *known_version && build == *known_build
+                    })
+            });
     let observed_version = version_number
         .as_deref()
         .zip(build.as_deref())
