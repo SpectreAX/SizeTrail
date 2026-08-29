@@ -6,6 +6,7 @@ use crate::model::{Advice, Finding, Measurement, SignalObservation};
 use crate::policy::PolicyCtx;
 
 pub mod homebrew;
+mod store;
 pub mod xcode;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -66,6 +67,11 @@ pub struct InventoryItem {
 #[derive(Clone, Debug)]
 pub enum InventoryIdentity {
     Path,
+    HomebrewKeg {
+        formula: String,
+        version: String,
+        installed_on_request: Option<bool>,
+    },
     SimulatorDevice {
         udid: String,
         name: String,

@@ -1,9 +1,14 @@
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
 use std::fs;
+use std::os::unix::fs::symlink;
 use std::path::Path;
 
-use sizetrail::adapters::{AdapterDegradedReason, AdapterState, homebrew};
+use sizetrail::adapters::{
+    AdapterDegradedReason, AdapterState, InventoryIdentity, ToolchainAdapter, homebrew,
+};
+use sizetrail::fsx::Root;
+use sizetrail::model::{MeasurementBasis, MeasurementValue, ObservationRelation, SignalId};
 use sizetrail::policy::{PolicyCtx, SIDE_EFFECT_REGISTRY};
 
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -18,6 +23,20 @@ fn write(path: &Path, contents: &str) {
 fn make_installation(root: &Path, prefix: &str, store: &str) {
     write(&root.join(prefix).join("bin/brew"), "fixture");
     fs::create_dir_all(root.join(prefix).join(store)).expect("fixture store must be created");
+}
+
+fn exact_bytes(item: &sizetrail::adapters::InventoryItem, basis: MeasurementBasis) -> u64 {
+    item.measurements
+        .iter()
+        .find_map(|measurement| {
+            (std::mem::discriminant(&measurement.basis) == std::mem::discriminant(&basis))
+                .then_some(&measurement.value)
+        })
+        .and_then(|value| match value {
+            MeasurementValue::ExactBytes { bytes } => Some(*bytes),
+            _ => None,
+        })
+        .expect("the requested exact measurement must exist")
 }
 
 fn repository_with_describe_cache() -> tempfile::TempDir {
@@ -161,4 +180,121 @@ fn a_brew_launcher_without_cellar_or_caskroom_is_not_an_installation() {
     );
 
     assert_eq!(homebrew::discover_layout(Some(fixture.path())), None);
+}
+
+#[test]
+fn home_and_prefix_stores_remain_separate_and_keg_identity_comes_from_directories() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    make_installation(fixture.path(), "opt/homebrew", "Cellar");
+    write(
+        &fixture
+            .path()
+            .join("Library/Caches/Homebrew/downloads/source.tar.gz"),
+        "download",
+    );
+    let keg = fixture.path().join("opt/homebrew/Cellar/example/1.2.3");
+    write(&keg.join("lib/libexample.1.dylib"), "library-bytes");
+    symlink("libexample.1.dylib", keg.join("lib/libexample.dylib"))
+        .expect("versioned library link must be created");
+    fs::hard_link(
+        keg.join("lib/libexample.1.dylib"),
+        keg.join("lib/libexample-hardlink.dylib"),
+    )
+    .expect("hardlink fixture must be created");
+    write(
+        &fixture
+            .path()
+            .join("opt/homebrew/Cellar/example/2.0/INSTALL_RECEIPT.json"),
+        r#"{"installed_on_request":true,"name":"must-not-be-used"}"#,
+    );
+
+    let home_root = Root::open(fixture.path()).expect("HOME Root must open");
+    let layout = homebrew::discover_layout(Some(fixture.path())).expect("layout must exist");
+    let prefix_root = homebrew::open_prefix_root(&layout).expect("prefix Root must open");
+    let adapter = homebrew::HomebrewAdapter::new(
+        &home_root,
+        &prefix_root,
+        &layout,
+        &[],
+        Ok(false),
+        Ok(false),
+    );
+    let inventory = adapter.inventory(
+        &mut PolicyCtx::for_scan(),
+        &AdapterState::Ready {
+            version: "6.0.19".to_owned(),
+        },
+    );
+
+    let download = inventory
+        .items
+        .iter()
+        .find(|item| item.rule_id == "homebrew.cache_downloads")
+        .expect("HOME-side cache must be measured");
+    assert_eq!(
+        download.normalized_path,
+        "~/Library/Caches/Homebrew/downloads"
+    );
+    let cellar = inventory
+        .items
+        .iter()
+        .find(|item| item.rule_id == "homebrew.cellar")
+        .unwrap_or_else(|| {
+            panic!(
+                "prefix-side keg must be measured; items={:?}, gaps={:?}",
+                inventory.items, inventory.gaps
+            )
+        });
+    assert_eq!(cellar.normalized_path, "/opt/homebrew/Cellar/example/1.2.3");
+    assert!(
+        inventory
+            .items
+            .iter()
+            .all(|item| item.rule_id != "homebrew.total"),
+        "HOME and prefix Roots must never be summed"
+    );
+    assert!(matches!(
+        &cellar.identity,
+        InventoryIdentity::HomebrewKeg {
+            formula,
+            version,
+            installed_on_request: None,
+        } if formula == "example" && version == "1.2.3"
+    ));
+    assert!(inventory.items.iter().any(|item| matches!(
+        &item.identity,
+        InventoryIdentity::HomebrewKeg {
+            formula,
+            version,
+            installed_on_request: Some(true),
+        } if formula == "example" && version == "2.0"
+    )));
+
+    let target = fs::symlink_metadata(keg.join("lib/libexample.1.dylib"))
+        .expect("target metadata must be readable");
+    let link = fs::symlink_metadata(keg.join("lib/libexample.dylib"))
+        .expect("link metadata must be readable");
+    assert_eq!(
+        exact_bytes(cellar, MeasurementBasis::LogicalSize),
+        target.len() + link.len(),
+        "the hardlink is deduplicated and the symlink contributes only itself"
+    );
+    assert!(cellar.observations.iter().any(|observation| {
+        observation.signal == SignalId::MultipleHardlinks
+            && observation.relation == ObservationRelation::DeletionScope
+    }));
+    let interval = cellar
+        .measurements
+        .iter()
+        .find(|measurement| {
+            matches!(
+                measurement.basis,
+                MeasurementBasis::PrivateFloorAllocatedCeiling
+            )
+        })
+        .expect("disposition interval must exist");
+    assert!(matches!(
+        interval.value,
+        MeasurementValue::IntervalBytes { floor_bytes: 0, .. }
+    ));
 }
