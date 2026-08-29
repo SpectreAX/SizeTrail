@@ -69,6 +69,15 @@ fn scan_real_home() -> Value {
     serde_json::from_slice(&output.stdout).expect("stdout must be one JSON document")
 }
 
+/// A non-blocking lane whose failure is not diagnosable from its own log costs a full CI round
+/// trip to explain, so every assertion below carries the typed regions and gaps with it.
+fn diagnostics(document: &Value) -> String {
+    format!(
+        "regions={} coverage_gaps={}",
+        document["payload"]["regions"], document["payload"]["coverage_gaps"]
+    )
+}
+
 fn region_status(document: &Value, id: &str) -> String {
     document["payload"]["regions"]
         .as_array()
@@ -92,8 +101,10 @@ fn real_xcode_storage_produces_structurally_valid_findings() {
     );
     let xcode = region_status(&document, "xcode");
     assert_ne!(
-        xcode, "\"not_present\"",
-        "a host with {developer_dir} must not report the Xcode region as absent"
+        xcode,
+        "\"not_present\"",
+        "a host with {developer_dir} must not report the Xcode region as absent; {}",
+        diagnostics(&document)
     );
 
     let findings = document["payload"]["findings"]
@@ -102,7 +113,8 @@ fn real_xcode_storage_produces_structurally_valid_findings() {
     assert!(
         !findings.is_empty(),
         "a real Xcode host with prebuilt simulator device sets produced no findings; an empty \
-         result here means the probe-to-inventory path did not run, not that storage is absent"
+         result here means the probe-to-inventory path did not run, not that storage is absent; {}",
+        diagnostics(&document)
     );
 
     for finding in findings {

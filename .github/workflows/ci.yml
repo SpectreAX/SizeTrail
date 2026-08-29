@@ -148,6 +148,10 @@ jobs:
         run: |
           xcode-select -p
           xcodebuild -version
+          # The adapter gates on this, and a hosted counterexample already showed it is not a
+          # sufficient readiness signal (Q43), so record the raw status rather than inferring it.
+          status=0; xcodebuild -checkFirstLaunchStatus || status=$?
+          echo "checkFirstLaunchStatus=$status"
           xcrun simctl list runtimes || true
           ls -1 "$HOME/Library/Developer/CoreSimulator/Devices" 2>/dev/null | head -20 || true
 
@@ -166,8 +170,14 @@ jobs:
           SWIFT
           echo 'public func throwaway() -> Int { 1 }' > Throwaway/Sources/Throwaway/Throwaway.swift
           cd Throwaway
-          xcodebuild -scheme Throwaway -destination 'generic/platform=macOS' build || true
+          # The scheme xcodebuild synthesises for a package is not reliably named after the
+          # package across Xcode versions, so discover it instead of guessing.
+          scheme="$(xcodebuild -list -json 2>/dev/null | jq -r '(.workspace // .project).schemes[0] // empty')"
+          [ -n "$scheme" ] || scheme=Throwaway
+          echo "scheme=$scheme"
+          xcodebuild -scheme "$scheme" -destination 'generic/platform=macOS' build || true
           du -sh "$HOME/Library/Developer/Xcode/DerivedData" 2>/dev/null || true
+          ls -1 "$HOME/Library/Developer/Xcode/DerivedData" 2>/dev/null || true
 
       - name: Real-environment attribution and version-gate degradation
         run: cargo test --locked --test real_environment -- --ignored --nocapture
