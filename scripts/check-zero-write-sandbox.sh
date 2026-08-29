@@ -72,24 +72,47 @@ wait_for_marker() {
   done
 }
 
+establish_observer() {
+  marker="$1"
+  target="$2"
+  attempts=0
+  while true; do
+    set +e
+    /usr/bin/env "${environment[@]}" "$sandbox" -p "$(profile_for "$marker")" \
+      /bin/sh -c ': > "$1" 2>/dev/null || true; exit 0' sh "$target" \
+      >"$probe_root/mutation.stdout" 2>"$probe_root/mutation.stderr"
+    mutation_status=$?
+    set -e
+
+    if [[ $mutation_status -ne 0 || -e "$target" ]]; then
+      echo "sandbox observer probe did not swallow a rejected write as expected" >&2
+      exit 1
+    fi
+    if grep -F "$marker" "$events" | grep -F "file-write-create" | grep -Fq "${target//\//\\/}"; then
+      return
+    fi
+    if ! kill -0 "$observer_pid" 2>/dev/null; then
+      echo "sandbox violation observer exited before $marker" >&2
+      exit 1
+    fi
+    attempts=$((attempts + 1))
+    if [[ $attempts -ge 100 ]]; then
+      echo "timed out establishing sandbox observer: $marker" >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+}
+
 /usr/bin/log stream --style ndjson --level debug \
   --predicate "eventMessage CONTAINS[c] '$run_token'" \
   >"$events" 2>"$probe_root/log.stderr" &
 observer_pid=$!
 
-set +e
-/usr/bin/env "${environment[@]}" "$sandbox" -p "$(profile_for "$start_marker")" \
-  /bin/sh -c ': > "$1" 2>/dev/null || true; exit 0' sh \
-  "$probe_root/home/.sizetrail-mutation" \
-  >"$probe_root/mutation.stdout" 2>"$probe_root/mutation.stderr"
-mutation_status=$?
-set -e
-
-if [[ $mutation_status -ne 0 || -e "$probe_root/home/.sizetrail-mutation" ]]; then
-  echo "sandbox observer probe did not swallow a rejected write as expected" >&2
-  exit 1
-fi
-wait_for_marker "$start_marker" "file-write-create" "$probe_root/home/.sizetrail-mutation"
+# `log stream` has no ready notification and drops events emitted before subscription. Repeat a
+# swallowed, denied write until its unique message is observed; this is the handshake that proves
+# the observer is live before the product process runs.
+establish_observer "$start_marker" "$probe_root/home/.sizetrail-mutation"
 
 set +e
 /usr/bin/env "${environment[@]}" "$sandbox" -p "$(profile_for "$scan_marker")" \
