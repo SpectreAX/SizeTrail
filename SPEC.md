@@ -374,6 +374,14 @@ Devices root 时 devices probe 调用为 0。simctl stderr 原文只写 stderr�
 - **支持表由实际 CI matrix 生成**，不静态声称永久版本列表。
 - 结构性约束：最多两个 GA + 一个 beta，自动轮换。
 
+#### 真实环境 lane（Q44）
+
+除上述 lane 外，另有一个 **non-blocking** lane 在 runner 的真实 `$HOME` 上执行真实 scan，取证 fixture 无法覆盖的环境形态（hosted image 预建的 CoreSimulator device set 与 runtime 由 Apple 生成，不是为本项目生成）。
+
+**它必须保持 non-blocking。** hosted image 的 Xcode 版本是移动目标；若该 lane required，版本轮换会让 `main` 变红，而当时最省事的修法就是放宽 §4 的精确版本门控。**不得让 CI 压力具备侵蚀安全门禁的能力。**
+
+**永久覆盖边界：`iOS DeviceSupport` 在 hosted runner 上永久不可构造**（它只来自连接真实 iOS 设备），永久停留在 fixture 证据。这是边界，不是待办。
+
 ### 5.4 目录布局
 
 ```
@@ -638,6 +646,7 @@ GA runner 记录 fixture benchmark，但**只发布「该 runner image + fixture
 11. **规则表完整性测试** — 遍历全部内置规则：`evidence` 非空、正交字段合法、`adapter` 是已编译 id、`paths` 非空、存在对应 fixture、无 `override_reason` 缺失。
 12. **advice 类型测试** — 断言 `destructive` advice 在类型上无法进入 probe runner；断言 advice 命令从不含 `--force` / `--yes` / shell 管道；断言命令不含任何用户输入。
 13. **finding ID 稳定性测试** — 断言 ID 与发现顺序无关；断言 HOME 变化下 digest 不变；断言算法版本变更时 `--from` 校验失败。
+14. **真实环境测试（Q44，non-blocking lane 专用）** — 在 runner 真实 `$HOME` 上执行真实 scan，拆成两条互不替代的断言。**A 文件系统侧归因**：预建模拟器 device set、runtime 与现场 build 的 `DerivedData` 必须产生结构正确的 findings。**B 版本门控降级**：版本不匹配时必须干净降级为 `unknown_version`，既不使 scan 失败，也不执行 simctl wrapper。两条禁止：**不得断言字节值**（真实体积非确定，只断言 `floor ≤ ceiling`、区间不收敛、每个数字带 basis、无跨 basis 求和、typed gap 合法，且不进第 6 项的逐字节 payload fixture）；**不得用作零写门禁**（Xcode/CoreSimulator 后台服务会独立修改这些目录，快照断言按构造 flaky，而 flaky 门禁的结局是被关掉且声明留下）。
 
 ### 10.3 CI 门禁
 

@@ -52,5 +52,21 @@
       "release_build": false,
       "benchmark": false
     }
+  ],
+  "real_environment_lanes": [
+    {
+      "label": "Real Xcode environment on macOS 15 Apple Silicon",
+      "runner": "macos-15",
+      "os": "macOS 15",
+      "arch": "arm64",
+      "required": false
+    },
+    {
+      "label": "Real Xcode environment on macOS 26 Apple Silicon",
+      "runner": "macos-26",
+      "os": "macOS 26",
+      "arch": "arm64",
+      "required": false
+    }
   ]
 }

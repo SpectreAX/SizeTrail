@@ -48,21 +48,26 @@ fn generate_empty_scan_document() {
             .as_str()
             .expect("API baseline must be text")
     );
-    for lane in platforms["runtime_lanes"]
-        .as_array()
-        .expect("runtime lanes must be an array")
-    {
-        support.push_str(&format!(
-            "| {} (`{}`) | `{}` | {} |\n",
-            lane["label"].as_str().expect("label must be text"),
-            lane["runner"].as_str().expect("runner must be text"),
-            lane["arch"].as_str().expect("architecture must be text"),
-            if lane["required"] == true {
-                "required"
-            } else {
-                "experimental; non-blocking"
-            }
-        ));
+    for (key, absent_status) in [
+        ("runtime_lanes", "experimental; non-blocking"),
+        ("real_environment_lanes", "real environment; non-blocking"),
+    ] {
+        for lane in platforms[key]
+            .as_array()
+            .unwrap_or_else(|| panic!("{key} must be an array"))
+        {
+            support.push_str(&format!(
+                "| {} (`{}`) | `{}` | {} |\n",
+                lane["label"].as_str().expect("label must be text"),
+                lane["runner"].as_str().expect("runner must be text"),
+                lane["arch"].as_str().expect("architecture must be text"),
+                if lane["required"] == true {
+                    "required"
+                } else {
+                    absent_status
+                }
+            ));
+        }
     }
     fs::write("docs/generated/support-matrix.md", support).expect("support matrix must be written");
 

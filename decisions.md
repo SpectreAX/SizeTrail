@@ -923,6 +923,39 @@ CoreSimulator inventory（不满足 Q29/Q39 选择的深 adapter）。
 
 ---
 
+## Q44 — 真实环境 lane：非阻塞、双断言、永久不作零写证据
+
+**决策：新增一个 non-blocking hosted lane，在 runner 的真实 `$HOME` 上跑真实 scan，并拆成两条互不替代的断言。**
+
+- **断言 A（文件系统侧归因）**：模拟器 device set、runtime，以及现场 build 出来的 `DerivedData`，必须产生结构正确的 findings。
+- **断言 B（版本门控本身是被测对象）**：版本不匹配时必须干净降级为 `unknown_version`，既不使 scan 失败，也不执行 simctl wrapper（Q43）。
+
+理由不是「多跑一个 lane」。**fixture 只能包含作者已经想到的东西**，而 `tests/fixtures/xcode-home/` 是几个 `artifact.bin`。hosted image 预建的 CoreSimulator device set 由 Apple 的镜像团队生成，不是为 SizeTrail 生成 —— 目录形态、`device.plist` 内容与 runtime 布局都可能与 fixture 完全不同。这是产品第一次面对不是为它准备的环境。
+
+2026-08-29 核对 `actions/runner-images` 当前 image 清单：
+
+| 归因对象 | hosted runner |
+|---|---|
+| Xcode 安装 | 真实。`macos-15` image 9 个版本（16.0–26.3，默认 16.4）；`macos-26` image 7 个（26.0.1–26.6，默认 26.6） |
+| 模拟器 runtime 与 device set | 真实且预建。两个 image 均有 Installed SDKs 与 Installed Simulators 段 |
+| `DerivedData` / `Archives` | 空，但可现场构造 |
+| `iOS DeviceSupport` | **永久不可构造** |
+
+**永久覆盖边界：`iOS DeviceSupport` 只能来自连接真实 iOS 设备，hosted runner 永远拿不到。** 它永久停留在 fixture 证据，必须写成边界而不是待办事项 —— 待办会被理解为「将来会补」。
+
+**lane 必须 non-blocking。** hosted image 的 Xcode 版本表是移动目标（上表数周即变一轮）。若该 lane required，Apple 下次轮换 Xcode 就会让 `main` 变红，而那时最省事的修法是放宽 Q39 的精确版本门控。**绝不能让 CI 压力具备侵蚀安全门禁的能力。** 这与 §9.0 同源：门禁的价值取决于它不能被便利性绕过。
+
+**两条禁止：**
+
+1. **不得断言字节值。** 真实 `DerivedData` 与模拟器体积非确定，lane 只能断言结构不变量：findings 存在、每个数字带 basis、`floor ≤ ceiling`、区间不收敛、无跨 basis 求和、typed gap 合法。它不进 §10.2.6 的 payload 逐字节 fixture。
+2. **不得用作零写门禁。** 让 SizeTrail 扫真实 Xcode 目录并前后快照本来是更强的零写证据，但 Xcode 与 CoreSimulator 的后台服务会独立修改那些目录，快照断言按构造就是 flaky。**flaky 门禁的结局是被关掉而声明留下** —— 那正是 §9.0 想防的腐烂形态。零写证据继续由 §10.2.1 的重定向 fixture 与 Q42/Q34 的 Seatbelt 分层取证。
+
+被否：把 runner 的 Xcode 版本加入门控允许集（把维护负担绑定到 image 轮换节奏，并让 CI 压力反向侵蚀 Q39）；把 lane 设为 required（同一侵蚀压力）；复用零写快照 harness 作为该 lane 的门禁（按构造 flaky）；把 `DeviceSupport` 记为待办而非永久边界；只测文件系统侧而放弃对版本门控降级路径的断言（那条路径在 hosted runner 上恰恰是常态）。
+
+影响：`SPEC.md` §5.3、§10.2、§10.3 与通道覆盖矩阵；`ci/platforms.json`；`.github/workflows/ci.yml`；新增真实环境测试。
+
+---
+
 ## 附录 A — 实测环境基线
 
 采集于 2026-08-26，作为规则表量级参考与回归基线：

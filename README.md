@@ -45,6 +45,8 @@ API baseline: **macOS 13 best effort, not runtime-tested in hosted CI**
 | macOS 26 Apple Silicon (`macos-26`) | `arm64` | required |
 | macOS 26 Intel (`macos-26-intel`) | `x86_64` | required |
 | Xcode 27 preview on macOS 26 Apple Silicon (`xcode-27`) | `arm64` | experimental; non-blocking |
+| Real Xcode environment on macOS 15 Apple Silicon (`macos-15`) | `arm64` | real environment; non-blocking |
+| Real Xcode environment on macOS 26 Apple Silicon (`macos-26`) | `arm64` | real environment; non-blocking |
 <!-- END GENERATED: support-matrix -->
 
 ## Measurement example

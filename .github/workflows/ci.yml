@@ -21,10 +21,13 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       runtime: ${{ steps.platforms.outputs.runtime }}
+      real_environment: ${{ steps.platforms.outputs.real_environment }}
     steps:
       - uses: actions/checkout@v5
       - id: platforms
-        run: echo "runtime=$(jq -c '{include:.runtime_lanes}' ci/platforms.json)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "runtime=$(jq -c '{include:.runtime_lanes}' ci/platforms.json)" >> "$GITHUB_OUTPUT"
+          echo "real_environment=$(jq -c '{include:.real_environment_lanes}' ci/platforms.json)" >> "$GITHUB_OUTPUT"
 
   test:
     name: ${{ matrix.label }}
@@ -122,3 +125,49 @@ jobs:
         run: |
           cargo deny --locked check
           cargo audit --file Cargo.lock
+
+  # Q44: evidence from directories this project did not create. Deliberately non-blocking --
+  # hosted images rotate Xcode versions constantly, and if this lane could turn main red the
+  # cheapest fix under that pressure would be loosening the exact-version gate. CI pressure must
+  # never be able to erode a safety gate.
+  real-environment:
+    name: ${{ matrix.label }}
+    needs: matrix
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix.outputs.real_environment) }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@1.98.0
+
+      - name: Report the real toolchain under test
+        run: |
+          xcode-select -p
+          xcodebuild -version
+          xcrun simctl list runtimes || true
+          ls -1 "$HOME/Library/Developer/CoreSimulator/Devices" 2>/dev/null | head -20 || true
+
+      # DerivedData and Archives are empty on a fresh runner. iOS DeviceSupport can never be
+      # constructed here because it only comes from connecting a physical device (Q44); it stays
+      # fixture-only, permanently.
+      - name: Populate DerivedData with a throwaway build
+        run: |
+          work="$(mktemp -d)"
+          cd "$work"
+          mkdir -p Throwaway/Sources/Throwaway
+          cat > Throwaway/Package.swift <<'SWIFT'
+          // swift-tools-version:5.9
+          import PackageDescription
+          let package = Package(name: "Throwaway", targets: [.target(name: "Throwaway")])
+          SWIFT
+          echo 'public func throwaway() -> Int { 1 }' > Throwaway/Sources/Throwaway/Throwaway.swift
+          cd Throwaway
+          xcodebuild -scheme Throwaway -destination 'generic/platform=macOS' build || true
+          du -sh "$HOME/Library/Developer/Xcode/DerivedData" 2>/dev/null || true
+
+      - name: Real-environment attribution and version-gate degradation
+        run: cargo test --locked --test real_environment -- --ignored --nocapture
