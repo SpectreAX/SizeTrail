@@ -71,7 +71,8 @@ impl Layout {
 
 pub struct HomebrewAdapter<'a> {
     home_root: &'a Root,
-    prefix_root: &'a Root,
+    prefix_root: Option<&'a Root>,
+    prefix_gap: Option<InventoryGapReason>,
     layout: &'a Layout,
     excludes: &'a [PathBuf],
     home_volume_has_snapshots: Result<bool, Option<i32>>,
@@ -90,11 +91,31 @@ impl<'a> HomebrewAdapter<'a> {
     ) -> Self {
         Self {
             home_root,
-            prefix_root,
+            prefix_root: Some(prefix_root),
+            prefix_gap: None,
             layout,
             excludes,
             home_volume_has_snapshots,
             prefix_volume_has_snapshots,
+        }
+    }
+
+    #[must_use]
+    pub const fn without_prefix(
+        home_root: &'a Root,
+        layout: &'a Layout,
+        excludes: &'a [PathBuf],
+        home_volume_has_snapshots: Result<bool, Option<i32>>,
+        prefix_gap: InventoryGapReason,
+    ) -> Self {
+        Self {
+            home_root,
+            prefix_root: None,
+            prefix_gap: Some(prefix_gap),
+            layout,
+            excludes,
+            home_volume_has_snapshots,
+            prefix_volume_has_snapshots: Ok(false),
         }
     }
 }
@@ -112,7 +133,13 @@ impl ToolchainAdapter for HomebrewAdapter<'_> {
         if matches!(state, AdapterState::NotPresent) {
             return Inventory::default();
         }
-        self.inventory_stores()
+        let mut inventory = self.inventory_stores();
+        if let AdapterState::Degraded { reason, .. } = state {
+            inventory
+                .gaps
+                .push(InventoryGap::diagnostic("homebrew", degraded_gap(*reason)));
+        }
+        inventory
     }
 
     fn classify(&self, inventory: &Inventory) -> Result<Vec<Finding>, InventoryGapReason> {
@@ -166,6 +193,31 @@ impl HomebrewAdapter<'_> {
             };
         };
         let mut inventory = Inventory::default();
+        if let Some(reason) = self.prefix_gap {
+            inventory.gaps.push(InventoryGap {
+                region: "homebrew.prefix",
+                path: Some(self.layout.prefix.clone()),
+                reason,
+                stage: Some(InventoryStage::RootInitialization),
+                errno: None,
+            });
+        }
+        let snapshot_states = std::iter::once(("homebrew.home", self.home_volume_has_snapshots))
+            .chain(
+                self.prefix_root
+                    .map(|_| ("homebrew.prefix", self.prefix_volume_has_snapshots)),
+            );
+        for (region, snapshot_state) in snapshot_states {
+            if let Err(errno) = snapshot_state {
+                inventory.gaps.push(InventoryGap {
+                    region,
+                    path: None,
+                    reason: InventoryGapReason::VolumeSnapshotStateUnavailable,
+                    stage: Some(InventoryStage::VolumeSnapshots),
+                    errno,
+                });
+            }
+        }
         for rule in rules.iter().filter(|rule| rule.adapter == "homebrew") {
             for pattern in &rule.paths {
                 let expansion = if pattern.starts_with("~/") {
@@ -176,31 +228,36 @@ impl HomebrewAdapter<'_> {
                             .collect::<Vec<_>>()
                     })
                 } else if let Some(relative) = pattern.strip_prefix("$PREFIX/") {
-                    expand_pattern(
-                        self.prefix_root,
-                        self.prefix_root.path(),
-                        relative,
-                        self.excludes,
+                    self.prefix_root.map_or_else(
+                        || Ok(Vec::new()),
+                        |prefix_root| {
+                            expand_pattern(prefix_root, prefix_root.path(), relative, self.excludes)
+                                .map(|paths| {
+                                    paths
+                                        .into_iter()
+                                        .map(|path| (prefix_root, path, false))
+                                        .collect::<Vec<_>>()
+                                })
+                        },
                     )
-                    .map(|paths| {
-                        paths
-                            .into_iter()
-                            .map(|path| (self.prefix_root, path, false))
-                            .collect::<Vec<_>>()
-                    })
                 } else if let (Some(cellar), Some(relative)) =
                     (&self.layout.cellar, pattern.strip_prefix("$CELLAR/"))
                 {
-                    let cellar = cellar.strip_prefix(&self.layout.prefix).map_or_else(
-                        |_| cellar.to_path_buf(),
-                        |path| self.prefix_root.path().join(path),
-                    );
-                    expand_pattern(self.prefix_root, &cellar, relative, self.excludes).map(
-                        |paths| {
-                            paths
-                                .into_iter()
-                                .map(|path| (self.prefix_root, path, false))
-                                .collect::<Vec<_>>()
+                    self.prefix_root.map_or_else(
+                        || Ok(Vec::new()),
+                        |prefix_root| {
+                            let cellar = cellar.strip_prefix(&self.layout.prefix).map_or_else(
+                                |_| cellar.to_path_buf(),
+                                |path| prefix_root.path().join(path),
+                            );
+                            expand_pattern(prefix_root, &cellar, relative, self.excludes).map(
+                                |paths| {
+                                    paths
+                                        .into_iter()
+                                        .map(|path| (prefix_root, path, false))
+                                        .collect::<Vec<_>>()
+                                },
+                            )
                         },
                     )
                 } else {
@@ -215,6 +272,20 @@ impl HomebrewAdapter<'_> {
                         continue;
                     }
                 };
+                if stores.is_empty()
+                    && rule.id.starts_with("homebrew.cache_")
+                    && pattern.starts_with("~/")
+                {
+                    inventory.gaps.push(InventoryGap {
+                        region: "homebrew.cache",
+                        path: pattern
+                            .strip_prefix("~/")
+                            .map(|relative| self.home_root.path().join(relative)),
+                        reason: InventoryGapReason::AbsentOrChanged,
+                        stage: Some(InventoryStage::RuleEvaluation),
+                        errno: None,
+                    });
+                }
                 for (root, path, home_side) in stores {
                     self.measure_rule_store(
                         rule.id.as_str(),
@@ -245,7 +316,7 @@ impl HomebrewAdapter<'_> {
         let normalized_path = if home_side {
             normalized_report_path(self.home_root.path(), &path).ok()
         } else {
-            self.layout.normalized_prefix_path(self.prefix_root, &path)
+            self.layout.normalized_prefix_path(root, &path)
         };
         let Some(normalized_path) = normalized_path else {
             inventory.gaps.push(InventoryGap {
@@ -290,6 +361,23 @@ impl HomebrewAdapter<'_> {
                 InventoryIdentity::Path
             },
         });
+        if rule_id == "homebrew.caskroom" {
+            match cask_artifact_outside_prefix(root, &path, &self.layout.reported_prefix) {
+                Ok(true) => inventory.gaps.push(InventoryGap {
+                    region: "homebrew.caskroom",
+                    path: Some(path),
+                    reason: InventoryGapReason::CaskArtifactOutsidePrefix,
+                    stage: Some(InventoryStage::RuleEvaluation),
+                    errno: None,
+                }),
+                Ok(false) => {}
+                Err(error) => {
+                    inventory
+                        .gaps
+                        .push(io_gap(&path, InventoryStage::RuleEvaluation, &error))
+                }
+            }
+        }
     }
 }
 
@@ -388,11 +476,87 @@ fn keg_identity(root: &Root, path: &Path) -> InventoryIdentity {
 }
 
 fn io_gap(path: &Path, stage: InventoryStage, error: &io::Error) -> InventoryGap {
+    let errno = error.raw_os_error();
     InventoryGap {
         region: "homebrew",
         path: Some(path.to_path_buf()),
-        reason: InventoryGapReason::TraversalFailed,
+        reason: match errno {
+            Some(2) => InventoryGapReason::AbsentOrChanged,
+            Some(13) => InventoryGapReason::AccessDenied,
+            Some(1) => InventoryGapReason::PolicyDeniedUnknown,
+            _ => InventoryGapReason::TraversalFailed,
+        },
         stage: Some(stage),
-        errno: error.raw_os_error(),
+        errno,
     }
+}
+
+fn degraded_gap(reason: AdapterDegradedReason) -> InventoryGapReason {
+    match reason {
+        AdapterDegradedReason::UnknownVersion => InventoryGapReason::UnknownVersion,
+        AdapterDegradedReason::NotReady => InventoryGapReason::NotReady,
+        AdapterDegradedReason::Disabled => InventoryGapReason::Disabled,
+        AdapterDegradedReason::ProbeFailed | AdapterDegradedReason::InvalidSelection => {
+            InventoryGapReason::ProbeFailed
+        }
+    }
+}
+
+fn cask_artifact_outside_prefix(
+    root: &Root,
+    cask: &Path,
+    reported_prefix: &Path,
+) -> io::Result<bool> {
+    let mut stack = vec![cask.to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        for entry in root.children(&directory)? {
+            match entry.kind {
+                crate::fsx::RootEntryKind::Directory => stack.push(entry.path),
+                crate::fsx::RootEntryKind::Symlink => {
+                    let target = std::fs::read_link(&entry.path)?;
+                    let outside = if target.is_absolute() {
+                        let Some(target) = normalize_absolute(&target) else {
+                            return Ok(true);
+                        };
+                        !target.starts_with(reported_prefix) && !target.starts_with(root.path())
+                    } else {
+                        let Some(target) = entry
+                            .path
+                            .parent()
+                            .and_then(|parent| normalize_absolute(&parent.join(target)))
+                        else {
+                            return Ok(true);
+                        };
+                        !target.starts_with(root.path())
+                    };
+                    if outside {
+                        return Ok(true);
+                    }
+                }
+                crate::fsx::RootEntryKind::File | crate::fsx::RootEntryKind::Other => {}
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn normalize_absolute(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut normalized = PathBuf::from("/");
+    for component in path.components() {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(value) => normalized.push(value),
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return None;
+                }
+            }
+            Component::CurDir => {}
+            Component::Prefix(_) => return None,
+        }
+    }
+    Some(normalized)
 }

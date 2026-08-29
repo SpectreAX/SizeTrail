@@ -298,3 +298,108 @@ fn home_and_prefix_stores_remain_separate_and_keg_identity_comes_from_directorie
         MeasurementValue::IntervalBytes { floor_bytes: 0, .. }
     ));
 }
+
+#[test]
+fn caskroom_symlink_targets_outside_prefix_become_gaps_without_becoming_measurements() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    make_installation(fixture.path(), "opt/homebrew", "Caskroom");
+    let cask = fixture.path().join("opt/homebrew/Caskroom/zed/1.15.0");
+    fs::create_dir_all(&cask).expect("cask fixture must be created");
+    symlink("/Applications/Zed.app", cask.join("Zed.app")).expect("moved app link must be created");
+
+    let home_root = Root::open(fixture.path()).expect("HOME Root must open");
+    let layout = homebrew::discover_layout(Some(fixture.path())).expect("layout must exist");
+    let prefix_root = homebrew::open_prefix_root(&layout).expect("prefix Root must open");
+    let adapter = homebrew::HomebrewAdapter::new(
+        &home_root,
+        &prefix_root,
+        &layout,
+        &[],
+        Ok(false),
+        Ok(false),
+    );
+    let inventory = adapter.inventory(
+        &mut PolicyCtx::for_scan(),
+        &AdapterState::Degraded {
+            observed_version: None,
+            reason: AdapterDegradedReason::UnknownVersion,
+        },
+    );
+
+    assert!(inventory.gaps.iter().any(|gap| {
+        gap.reason == sizetrail::adapters::InventoryGapReason::CaskArtifactOutsidePrefix
+            && gap
+                .path
+                .as_deref()
+                .is_some_and(|path| path.ends_with("opt/homebrew/Caskroom/zed"))
+    }));
+    assert!(
+        inventory
+            .gaps
+            .iter()
+            .any(|gap| { gap.reason == sizetrail::adapters::InventoryGapReason::UnknownVersion })
+    );
+    assert!(
+        inventory
+            .gaps
+            .iter()
+            .any(|gap| { gap.reason == sizetrail::adapters::InventoryGapReason::AbsentOrChanged })
+    );
+    let caskroom = inventory
+        .items
+        .iter()
+        .find(|item| item.rule_id == "homebrew.caskroom")
+        .expect("Caskroom itself remains measurable");
+    assert_eq!(
+        exact_bytes(caskroom, MeasurementBasis::LogicalSize),
+        fs::symlink_metadata(cask.join("Zed.app"))
+            .expect("link metadata must be readable")
+            .len()
+    );
+    assert!(!caskroom.normalized_path.starts_with("/Applications"));
+}
+
+#[test]
+fn an_unavailable_prefix_root_keeps_home_measurements_and_declares_the_boundary_gap() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    make_installation(fixture.path(), "opt/homebrew", "Cellar");
+    write(
+        &fixture
+            .path()
+            .join("Library/Caches/Homebrew/downloads/source.tar.gz"),
+        "download",
+    );
+    let home_root = Root::open(fixture.path()).expect("HOME Root must open");
+    let layout = homebrew::discover_layout(Some(fixture.path())).expect("layout must exist");
+    let adapter = homebrew::HomebrewAdapter::without_prefix(
+        &home_root,
+        &layout,
+        &[],
+        Ok(false),
+        sizetrail::adapters::InventoryGapReason::AccessDenied,
+    );
+
+    let inventory = adapter.inventory(
+        &mut PolicyCtx::for_scan(),
+        &AdapterState::Ready {
+            version: "6.0.19".to_owned(),
+        },
+    );
+
+    assert!(
+        inventory
+            .items
+            .iter()
+            .any(|item| item.rule_id == "homebrew.cache_downloads")
+    );
+    assert!(
+        inventory
+            .items
+            .iter()
+            .all(|item| !item.normalized_path.starts_with("/opt/homebrew"))
+    );
+    assert!(inventory.gaps.iter().any(|gap| {
+        gap.reason == sizetrail::adapters::InventoryGapReason::AccessDenied
+            && gap.stage == Some(sizetrail::adapters::InventoryStage::RootInitialization)
+    }));
+}

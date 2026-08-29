@@ -178,6 +178,9 @@ const fn coverage_reason(reason: InventoryGapReason) -> CoverageGapReason {
         InventoryGapReason::VolumeSnapshotStateUnavailable => {
             CoverageGapReason::VolumeSnapshotStateUnavailable
         }
+        InventoryGapReason::CaskArtifactOutsidePrefix => {
+            CoverageGapReason::CaskArtifactOutsidePrefix
+        }
     }
 }
 
@@ -198,6 +201,7 @@ const fn gap_reason_id(reason: InventoryGapReason) -> &'static str {
         InventoryGapReason::TimedOut => "timed_out",
         InventoryGapReason::RuleSetInvalid => "rule_set_invalid",
         InventoryGapReason::VolumeSnapshotStateUnavailable => "volume_snapshot_state_unavailable",
+        InventoryGapReason::CaskArtifactOutsidePrefix => "cask_artifact_outside_prefix",
     }
 }
 

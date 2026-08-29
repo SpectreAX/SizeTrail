@@ -385,6 +385,7 @@ pub enum CoverageGapReason {
     TimedOut,
     RuleSetInvalid,
     VolumeSnapshotStateUnavailable,
+    CaskArtifactOutsidePrefix,
     ExcludedByUser,
 }
 

@@ -945,7 +945,7 @@ prefix 位于 HOME 之外，因此需要**为 prefix 单独 `Root::open`**。若
 | prefix Root 打不开（含跨卷） | `AccessDenied` 或 `TraversalFailed` |
 | `HOMEBREW_CACHE` 可能被 `brew.env` 改向 | `AbsentOrChanged`（缓存路径不存在时） |
 
-**`/Applications` 不进入 Homebrew region 的计量**（Q52）：cask receipt 的 `uninstall_artifacts` 只用于**声明 gap 存在**，不得用于把那些字节求和。
+**`/Applications` 不进入 Homebrew region 的计量**（Q52）：首要证据是 Caskroom 内 staged source symlink 的 link text；只做词法归一化与 prefix 边界比较，**不得** `stat`、`canonicalize`、遍历或计量目标。cask receipt 的 `uninstall_artifacts` 仅可作为补充证据，因为普通 `app` receipt 通常没有绝对 target；不得把 receipt 或 symlink 指向的字节求和。
 
 ### 12.2.6 advice 契约
 

@@ -113,11 +113,13 @@ pub enum InventoryGapReason {
     TimedOut,
     RuleSetInvalid,
     VolumeSnapshotStateUnavailable,
+    CaskArtifactOutsidePrefix,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InventoryStage {
+    RootInitialization,
     ListDirectory,
     MeasureObject,
     NormalizePath,
@@ -132,6 +134,7 @@ impl InventoryStage {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::RootInitialization => "root_initialization",
             Self::ListDirectory => "list_directory",
             Self::MeasureObject => "measure_object",
             Self::NormalizePath => "normalize_path",

@@ -1138,7 +1138,9 @@ cask 的 `app` artifact 被**移动**到 `/Applications`，Caskroom 只留一个
 
 **决策：Caskroom 按其自身内容如实计量，并对每个 artifact 落在 prefix 之外的 cask 发一条 typed gap；`/Applications` 不进入 Homebrew region 的计量。**
 
-不计量 `/Applications` 的理由不是做不到，而是归因会失真：那里的 app 与用户手工安装、App Store 安装的 app 混居，把它们算进「Homebrew」会把一个安装器的账记到工具链头上。cask receipt 的 `uninstall_artifacts` 里有绝对 `target` 路径，可用于**声明 gap 的存在**，不用于把那些字节求和。
+不计量 `/Applications` 的理由不是做不到，而是归因会失真：那里的 app 与用户手工安装、App Store 安装的 app 混居，把它们算进「Homebrew」会把一个安装器的账记到工具链头上。用于**声明 gap 的存在**而不用于求和的首要证据，是 Homebrew 移动 artifact 后留在 staged source 原位的符号链接；只读 link text 即可判定目标是否越出 prefix，且不需要触及目标。
+
+**实施期事实修正（2026-08-29，Homebrew 6.0.19）：** 普通 `app` cask 的 `.metadata/INSTALL_RECEIPT.json` 通常只有 `{"app":["X.app"]}`，没有绝对 target；显式 target 只可能位于 `uninstall_artifacts[i][<dsl-key>]` 的异构参数数组对象中。故 receipt 只能作为补充证据，不能单独支撑本决策；只解析 receipt 会漏掉本机已验证的普通 app 样本。实现须以 Caskroom 内 staged symlink 的词法目标为主，永不 `stat`、`canonicalize`、遍历或计量该目标。
 
 被否：把 `/Applications` 目标计入 Homebrew（跨 ownership 归因，且与手工安装无法区分）；跟随 Caskroom 的符号链接（Q51 已否，会重复计数并越过 root）；只报 Caskroom 尺寸不声明 gap（沉默的少算，等于用一个看起来完整的数字掩盖已知缺口）。
 
