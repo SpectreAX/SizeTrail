@@ -1077,6 +1077,75 @@ P1.2 建立 deny-write sandbox 时只有 `scan` 存在，当时明确记下「�
 
 ---
 
+## Q50 — Homebrew adapter 一次都不执行 `brew`
+
+P4.1 的默认预期是复用 P3 契约、注册若干只读 probe。查证 Homebrew 源码后这条路走不通。
+
+**没有任何 `brew` 调用被文档保证不写盘**，而且实测有反例：
+
+- `brew --version` 在 `.git/describe-cache/<HEAD-sha>` 缺失或过期时会 `rm -rf` 整个 cache 目录再重建写入，错误被吞掉，不可见。
+- `setup-analytics` 的 `rm -f ~/.homebrew_analytics_user_uuid` 发生在检查 `HOMEBREW_NO_ANALYTICS` **之前**，因此该变量挡不住它；它还可能 `git config --unset-all` 重写 `.git/config`。
+- 所有 Ruby 后端命令（`info --json`、`outdated`、`cleanup -n`）都会写 Bootsnap 编译缓存、可能下载 API JSON、并向 InfluxDB 上报。`outdated` 属于 `AUTO_UPDATE_COMMANDS`，会触发真实 `git fetch`。
+
+只有 `--prefix` / `--cache` / `--cellar` / `--repository` / `--caskroom` 的零参数形式与裸 `brew list` 由纯 Bash 快路径处理并在一切之前 `exit`。但这是 `brew.sh` 的**语句顺序**这一实现属性，不是承诺，且该顺序历史上变过。
+
+**决策：Homebrew adapter 的外部命令调用次数为 0。`SIDE_EFFECT_REGISTRY` 不新增任何条目。**
+
+这不是保守过度，而是红线 1 与 Q11「只读也有副作用」的直接推论：一个永久只读的工具不能让被观测对象因为被观测而写盘、联网、上报。§12 对 P4.1 的 DoD「无新增控制面」由此成为字面事实，而不是近似说法。
+
+代价与替代来源：
+
+- **版本**：读 `$HOMEBREW_REPOSITORY/.git/describe-cache/<HEAD-sha>`（实测内容即 `6.0.19` 这样的纯版本串），sha 由 `.git/HEAD` → `.git/refs/…` 或 `.git/packed-refs` 解析，全程只读。缺失、shallow 或无法解析时 adapter 记 `UnknownVersion`，不猜测。
+- **formula 身份**：来自目录名 `Cellar/<name>/<pkg_version>`，不来自 receipt —— receipt 里没有名字字段。
+- **显式安装 vs 依赖**：`<keg>/INSTALL_RECEIPT.json` 的 `installed_on_request`。**字段缺失必须记为 unknown，不能当 `false`**：旧版 Homebrew 写的是已移除的 `installed_as_dependency`，Homebrew 自己用 `installed_on_request_present?` 区分「缺失」与「false」。
+- **哪些版本已过期**：需要 `brew outdated`，因此 v0.2 **不提供**该判断，并明确说明原因，而不是用「最新 keg 之外都是旧的」冒充。
+
+被否：只调用「看起来只读」的快路径命令（依赖未承诺的语句顺序，且 `brew --prefix <formula>` 会回落到 Ruby）；调用时设满 `HOMEBREW_NO_*` 变量（`setup-analytics` 的删除已证明变量挡不住写入）；把 `brew` 调用登记为「已知副作用」后照常执行（红线 6 的同类问题上我们选择了不探测，此处应一致）。
+
+影响：`src/adapters/homebrew.rs`、`src/policy.rs`（不新增条目，但需测试断言其为 0）、`SPEC.md` §13。
+
+---
+
+## Q51 — store 内的符号链接不得中断计量
+
+`measure_store` 目前对任何 `RootEntryKind::Symlink | Other` 直接返回 Err，使该 store 整体 unmeasurable。
+
+这是通配展开中断（Q45）与散落文件（Q47）之后**同一 bug 类的第三次出现**：拿一个正常的文件系统形态当致命错误，代价是丢掉整个类别的字节。
+
+本机实测证据：
+
+- `/opt/homebrew/Cellar` 下有 581 个符号链接（`libheif.dylib -> libheif.1.dylib` 这类版本化库链接是 Homebrew 的常态）。按现行逻辑整个 Cellar 都测不出来。
+- `~/Library/Caches/Homebrew/Cask/<token>--<version>.dmg` 是指向 `../downloads/<sha>--<name>.dmg` 的符号链接。
+- 这同时是**已发布 Xcode adapter 的活缺陷**：`.framework` bundle 内部满是符号链接（`Versions/Current`），任何构建出 framework 的 DerivedData 都会让 `xcode.derived_data_build` 变成 unmeasurable。CI 的一次性 SwiftPM 构建不产生 framework，fixture 里也只有普通文件，所以从未被观测到。
+
+**决策：store 遍历枚举符号链接但永不跟随；它只贡献自身的 allocated 字节。**
+
+不跟随不是回避，而是正确性要求：`Cask/` 的条目指向 `downloads/`，跟随会把同一批字节数两遍。不跟随则天然无重复，且与 `Root` 全程 `FSOPT_NOFOLLOW_ANY` 的姿态一致。`RootEntryKind::Other`（socket、fifo、设备）同样计入自身尺寸而不特殊处理。
+
+因为它修的是已发布行为，**此项先于 P4.1 单独实施并单独发布**，不与新 adapter 捆绑。
+
+被否：跟随符号链接并靠 `FileIdentity` 去重（跨 store 边界仍会把 `downloads/` 的字节归到 `Cask/`，且需要跟随，与 root 的 NOFOLLOW 姿态冲突）；跳过符号链接且完全不计其尺寸（少算，虽然量小，但没有理由少算）；保留 Err 并给 typed gap（诚实但丢掉整个类别，正是本条要修的行为）。
+
+影响：`src/adapters/xcode.rs` 的 `measure_store`；fixture 需加符号链接；`SPEC.md` §12.1 与 §13。
+
+---
+
+## Q52 — cask 的字节不在 Caskroom 里
+
+cask 的 `app` artifact 被**移动**到 `/Applications`，Caskroom 只留一个符号链接。本机实测：`Caskroom/zed/1.15.0/Zed.app`、`Kumone.app`、`OrbStack.app` 均为指向 `/Applications` 的符号链接；而非 `app` 类 artifact 仍把完整载荷留在 Caskroom（研究中 `claude-code` 为 265 MB）。
+
+因此**任何把 Caskroom 尺寸标为「cask 占用」的数字都是错的**，而且错的方向逐 cask 不同 —— 这正是 §9.2 禁止的声明形态。
+
+**决策：Caskroom 按其自身内容如实计量，并对每个 artifact 落在 prefix 之外的 cask 发一条 typed gap；`/Applications` 不进入 Homebrew region 的计量。**
+
+不计量 `/Applications` 的理由不是做不到，而是归因会失真：那里的 app 与用户手工安装、App Store 安装的 app 混居，把它们算进「Homebrew」会把一个安装器的账记到工具链头上。cask receipt 的 `uninstall_artifacts` 里有绝对 `target` 路径，可用于**声明 gap 的存在**，不用于把那些字节求和。
+
+被否：把 `/Applications` 目标计入 Homebrew（跨 ownership 归因，且与手工安装无法区分）；跟随 Caskroom 的符号链接（Q51 已否，会重复计数并越过 root）；只报 Caskroom 尺寸不声明 gap（沉默的少算，等于用一个看起来完整的数字掩盖已知缺口）。
+
+影响：`InventoryGapReason` 新增 `CaskArtifactOutsidePrefix`，并同步 `src/scan.rs` 的 `coverage_reason` / `gap_reason_id`。
+
+---
+
 ## 附录 A — 实测环境基线
 
 采集于 2026-08-26，作为规则表量级参考与回归基线：

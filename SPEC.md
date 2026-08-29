@@ -859,6 +859,125 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 
 ---
 
+## 12.2 P4.1 — Homebrew adapter（Q50–Q52）
+
+本节的详细程度足以直接实施。所有路径与行为均已在维护者机器（Homebrew 6.0.19，`/opt/homebrew`）实测，或读 Homebrew 源码验证；见 `decisions.md` Q50–Q52。
+
+### 12.2.0 前置任务：符号链接不得中断计量（Q51，先于本阶段单独发布）
+
+`measure_store` 目前对 `RootEntryKind::Symlink | Other` 返回 Err，使整个 store unmeasurable。这是**已发布 Xcode adapter 的活缺陷**（`.framework` 内部的 `Versions/Current` 会让任何构建过 framework 的 DerivedData 变成 unmeasurable），也是 Homebrew 的阻断项（本机 `Cellar` 有 581 个符号链接）。
+
+要求：
+
+1. 遍历枚举符号链接与 `Other`，**永不跟随**，各只贡献自身 allocated 字节。
+2. fixture 加入符号链接条目，并验证撤销修复后测试转红。
+3. 作为独立提交与独立版本发布，不与 Homebrew adapter 捆绑。
+
+### 12.2.1 零外部调用（Q50）
+
+**Homebrew adapter 的外部命令调用次数必须为 0。`SIDE_EFFECT_REGISTRY` 不新增条目，并需测试断言 Homebrew 路径下的调用计数为 0。**
+
+版本只能读取，不能执行：
+
+```text
+$HOMEBREW_REPOSITORY/.git/HEAD            → ref 或直接 sha
+$HOMEBREW_REPOSITORY/.git/refs/…          → sha
+$HOMEBREW_REPOSITORY/.git/packed-refs     → sha（refs 文件不存在时）
+$HOMEBREW_REPOSITORY/.git/describe-cache/<sha>  → 版本串，如 6.0.19
+```
+
+任一环节缺失、shallow 或无法解析 → `AdapterState::Degraded { reason: UnknownVersion }`。**不得**用 keg receipt 的 `homebrew_version` 冒充当前版本：它记录的是当次安装所用版本，本机实测 receipt 为 `4.6.17-43-ga469d12` 而当前为 `6.0.19`。
+
+与 Xcode 不同，Homebrew **没有 verified-version 白名单**：adapter 不执行它，因此版本不影响调用安全，只作为报告字段。版本未知不阻断计量。
+
+### 12.2.2 prefix 与 root 解析
+
+prefix 与 repository **不是同一目录**：Apple Silicon 上 prefix 与 repository 同为 `/opt/homebrew`；Intel 上 prefix 是 `/usr/local` 而 repository 是 `/usr/local/Homebrew`。不得假设两者相等。
+
+发现顺序（全部只读，不执行 `brew`）：
+
+1. 候选 prefix 依次检查 `bin/brew` 存在且 `Cellar` 或 `Caskroom` 存在：`/opt/homebrew`、`/usr/local`。
+2. Cellar 位置：`$PREFIX/Cellar`，若不存在而 `$REPOSITORY/Cellar` 存在则用后者。
+3. 均未命中 → `AdapterState::NotPresent`（退出码 0，不是错误）。
+
+`HOMEBREW_PREFIX` 不是用户可设变量（`bin/brew` 由自身路径推导并显式禁止 `brew.env` 覆盖），因此**不读该环境变量**。`HOMEBREW_CACHE` / `HOMEBREW_LOGS` 确实可由 `brew.env` 覆盖，v0.2 **不支持**这些覆盖，并对非默认缓存位置的可能性发 gap 而不是假装默认位置就是全部。
+
+**`--root` 下的 prefix**：候选路径拼接到 root 之下，使 fixture 可提供 `<root>/opt/homebrew`。这与 `~/` 模式在 `--root` 下解析为 root 是同一机制。
+
+prefix 位于 HOME 之外，因此需要**为 prefix 单独 `Root::open`**。若该 Root 打不开（含 prefix 在其他卷上），记 typed gap 并只报告 HOME 侧的 store，不跨 Root 求和。
+
+### 12.2.3 store 与规则表
+
+`src/rules/builtin/homebrew.toml`。HOME 侧用 `~/` 模式走现有 `expand_home_pattern`；prefix 侧用 prefix Root。
+
+| rule id | 路径 | mechanism | recoverability | sensitivity |
+|---|---|---|---|---|
+| `homebrew.cache_downloads` | `~/Library/Caches/Homebrew/downloads` | `generated` | `redownload_bandwidth` | `low` |
+| `homebrew.cache_api` | `~/Library/Caches/Homebrew/api`、`api-source` | `generated` | `redownload_bandwidth` | `low` |
+| `homebrew.cache_bootsnap` | `~/Library/Caches/Homebrew/bootsnap` | `generated` | `rebuild_time_cost` | `low` |
+| `homebrew.cache_build_tools` | `~/Library/Caches/Homebrew/{cargo_cache,go_cache,go_mod_cache,glide_home,java_cache,npm_cache,pip_cache,gclient_cache}` | `generated` | `rebuild_time_cost` | `low` |
+| `homebrew.logs` | `~/Library/Logs/Homebrew` | `user_owned` | `unrecoverable` | `medium` |
+| `homebrew.cellar` | `$CELLAR/*/*` | `vendor_managed` | `redownload_bandwidth` | `medium` |
+| `homebrew.caskroom` | `$PREFIX/Caskroom/*` | `vendor_managed` | `redownload_bandwidth` | `medium` |
+| `homebrew.taps` | `$PREFIX/Library/Taps/*/*` | `generated` | `redownload_bandwidth` | `low` |
+
+`homebrew.logs` 的 `evidence` 必须写明它是**用户状态而非缓存**：失败构建的日志无法重新生成。`~/Library/Logs/Homebrew` 在从未源码构建的机器上不存在（本机即如此），缺失是正常状态而非 gap。
+
+`homebrew.cellar` 是 rack/keg 两层：`Cellar/<formula>/<pkg_version>`。同一 rack 可同时持有多个 keg。它是**已安装软件，不是缓存** —— `evidence` 不得暗示可回收，`advise` 不得给出删除建议。
+
+### 12.2.4 计量规则
+
+1. **符号链接不跟随**（§12.2.0）。`Cask/<token>--<version>` 指向 `../downloads/…`，跟随会把同一批字节数两遍。
+2. **hardlink 去重**沿用现有 `FileIdentity` 机制。
+3. `estimate_disposition(&extents, false)` —— 与 Xcode 一致，floor 结构性归零（Q40）。
+4. **不跨 Root 求和**：HOME 侧与 prefix 侧的 store 各自成 finding，不产生合计字段。
+5. keg 身份来自目录名，**不来自 receipt**（receipt 无名字字段）。`installed_on_request` 缺失记 unknown，不记 `false`。
+
+### 12.2.5 归因边界与 typed gap
+
+新增 `InventoryGapReason::CaskArtifactOutsidePrefix`，并同步 `src/scan.rs` 的 `coverage_reason` 与 `gap_reason_id`（两处均为穷举 match）。
+
+| 情形 | gap reason |
+|---|---|
+| cask 的 artifact 被移到 prefix 之外（Caskroom 只剩符号链接） | `CaskArtifactOutsidePrefix` |
+| `.git/describe-cache` 不可读或 shallow | adapter `Degraded { UnknownVersion }` |
+| prefix Root 打不开（含跨卷） | `AccessDenied` 或 `TraversalFailed` |
+| `HOMEBREW_CACHE` 可能被 `brew.env` 改向 | `AbsentOrChanged`（缓存路径不存在时） |
+
+**`/Applications` 不进入 Homebrew region 的计量**（Q52）：cask receipt 的 `uninstall_artifacts` 只用于**声明 gap 存在**，不得用于把那些字节求和。
+
+### 12.2.6 advice 契约
+
+`brew cleanup` **会卸载 formula**（`clean!` 内部调用 `autoremove`，除非设 `HOMEBREW_NO_AUTOREMOVE`），不只是删缓存。因此它是 `destructive`，在类型上不得进入 probe runner。
+
+`brew cleanup -n` 的预览**不可靠**，必须明确说明而不是当作 dry-run 推荐：`cleanup_unreferenced_downloads` 与 `cleanup_cache_db` 在 dry-run 下直接 early-return，因此它们将删除的 `downloads/` blob **从不出现在预览里**，量级可达数 GB。
+
+`homebrew.cellar` 与 `homebrew.logs` 只给 `RevealAdvice`，不给任何删除命令。
+
+### 12.2.7 必需测试
+
+1. prefix 发现：Apple Silicon 布局、Intel 布局（prefix ≠ repository）、`$REPOSITORY/Cellar` 回退、两者皆无 → `NotPresent`。
+2. 版本读取：`describe-cache` 命中；`HEAD` 为 ref 与为裸 sha 两种；`packed-refs` 回退；缺失 → `UnknownVersion`。
+3. **零调用断言**：Homebrew adapter 完整跑一遍后，`InvocationTracker` 计数为 0。
+4. 符号链接 fixture：Cellar 内版本化库链接、`Cask/` 指向 `downloads/` 的链接；断言不重复计数且不 unmeasurable。
+5. `CaskArtifactOutsidePrefix`：Caskroom 只剩符号链接的 cask 必须产生该 gap。
+6. `installed_on_request` 缺失 → unknown，不得为 `false`。
+7. 每条规则一个 `tests/fixtures/rules/<fixture_id>.json`。
+8. 零写 harness：Homebrew fixture 前后快照逐字段相等。
+9. `--no-homebrew` → `RegionStatus::ExcludedByUser`，退出码 0。
+10. real-environment lane 增加 Homebrew 断言（hosted runner 预装 Homebrew）。
+
+### 12.2.8 Definition of Done
+
+- Q51 的符号链接修复已单独发布。
+- 上述十项测试全绿；`SIDE_EFFECT_REGISTRY` 条目数未变，并有测试锁定。
+- 通道覆盖矩阵按本阶段后代码重新推导：新增 prefix Root、`.git` 元数据读取、receipt 解析、符号链接枚举各成一行；明确写出「未支持 `brew.env` 缓存改向」这一空格。
+- `--no-homebrew` 已接线（当前 flag 已声明但从未被读取）；`explain` 的 `f1:xcode:` 前缀硬编码已泛化；`validate_excludes` 已覆盖 Homebrew root。
+- `COMPILED_ADAPTER_IDS` 含 `"homebrew"`，`builtin_rules()` 解析两张表。
+- 生成文档重生成；release notes 落 `docs/release-notes/v0.2.0.md` → **发布 v0.2**。
+
+---
+
 ## 13. Skills 使用规定
 
 | Skill | 使用时机 | 说明 |
