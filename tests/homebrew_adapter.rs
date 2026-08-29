@@ -15,6 +15,11 @@ fn write(path: &Path, contents: &str) {
     fs::write(path, contents).expect("fixture file must be written");
 }
 
+fn make_installation(root: &Path, prefix: &str, store: &str) {
+    write(&root.join(prefix).join("bin/brew"), "fixture");
+    fs::create_dir_all(root.join(prefix).join(store)).expect("fixture store must be created");
+}
+
 fn repository_with_describe_cache() -> tempfile::TempDir {
     let fixture = tempfile::tempdir().expect("fixture repository must be created");
     write(
@@ -98,4 +103,62 @@ fn missing_homebrew_version_metadata_is_an_explicit_degraded_state() {
             reason: AdapterDegradedReason::UnknownVersion,
         }
     );
+}
+
+#[test]
+fn apple_silicon_prefix_is_preferred_and_opened_as_its_own_root() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    make_installation(fixture.path(), "opt/homebrew", "Cellar");
+    make_installation(fixture.path(), "usr/local", "Cellar");
+
+    let layout = homebrew::discover_layout(Some(fixture.path()))
+        .expect("the Apple Silicon layout must be discovered first");
+    assert_eq!(layout.prefix, fixture.path().join("opt/homebrew"));
+    assert_eq!(layout.repository, layout.prefix);
+    assert_eq!(layout.cellar, Some(layout.prefix.join("Cellar")));
+
+    let prefix_root = homebrew::open_prefix_root(&layout).expect("prefix Root must open");
+    assert_eq!(
+        prefix_root.path(),
+        fs::canonicalize(&layout.prefix)
+            .expect("fixture prefix must have a physical representation")
+    );
+}
+
+#[test]
+fn intel_prefix_keeps_the_repository_distinct() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    make_installation(fixture.path(), "usr/local", "Cellar");
+
+    let layout = homebrew::discover_layout(Some(fixture.path()))
+        .expect("the Intel layout must be discovered");
+    assert_eq!(layout.prefix, fixture.path().join("usr/local"));
+    assert_eq!(layout.repository, fixture.path().join("usr/local/Homebrew"));
+    assert_eq!(layout.cellar, Some(layout.prefix.join("Cellar")));
+}
+
+#[test]
+fn cellar_falls_back_to_the_repository_layout() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    make_installation(fixture.path(), "usr/local", "Caskroom");
+    fs::create_dir_all(fixture.path().join("usr/local/Homebrew/Cellar"))
+        .expect("repository Cellar must be created");
+
+    let layout = homebrew::discover_layout(Some(fixture.path()))
+        .expect("Caskroom proves the prefix is present");
+    assert_eq!(
+        layout.cellar,
+        Some(fixture.path().join("usr/local/Homebrew/Cellar"))
+    );
+}
+
+#[test]
+fn a_brew_launcher_without_cellar_or_caskroom_is_not_an_installation() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    write(
+        &fixture.path().join("opt/homebrew/bin/brew"),
+        "incomplete fixture",
+    );
+
+    assert_eq!(homebrew::discover_layout(Some(fixture.path())), None);
 }

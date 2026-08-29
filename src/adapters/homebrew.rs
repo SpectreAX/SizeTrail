@@ -1,7 +1,49 @@
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use crate::adapters::{AdapterDegradedReason, AdapterState};
+use crate::fsx::{Root, RootError};
 use crate::policy::PolicyCtx;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Layout {
+    pub prefix: PathBuf,
+    pub repository: PathBuf,
+    pub cellar: Option<PathBuf>,
+}
+
+pub fn discover_layout(sandbox_root: Option<&Path>) -> Option<Layout> {
+    [
+        (Path::new("/opt/homebrew"), Path::new("/opt/homebrew")),
+        (Path::new("/usr/local"), Path::new("/usr/local/Homebrew")),
+    ]
+    .into_iter()
+    .find_map(|(prefix, repository)| {
+        let prefix = under_sandbox(sandbox_root, prefix);
+        if std::fs::symlink_metadata(prefix.join("bin/brew")).is_err()
+            || (std::fs::symlink_metadata(prefix.join("Cellar")).is_err()
+                && std::fs::symlink_metadata(prefix.join("Caskroom")).is_err())
+        {
+            return None;
+        }
+        let repository = under_sandbox(sandbox_root, repository);
+        let cellar = if std::fs::symlink_metadata(prefix.join("Cellar")).is_ok() {
+            Some(prefix.join("Cellar"))
+        } else if std::fs::symlink_metadata(repository.join("Cellar")).is_ok() {
+            Some(repository.join("Cellar"))
+        } else {
+            None
+        };
+        Some(Layout {
+            prefix,
+            repository,
+            cellar,
+        })
+    })
+}
+
+pub fn open_prefix_root(layout: &Layout) -> Result<Root, RootError> {
+    Root::open(&layout.prefix)
+}
 
 pub fn probe_version(repository: &Path, _ctx: &mut PolicyCtx<'_>) -> AdapterState {
     read_version(repository).map_or_else(
@@ -49,4 +91,11 @@ fn read_reference(git: &Path, reference: &str) -> Option<String> {
 
 fn valid_sha(value: &str) -> bool {
     matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn under_sandbox(sandbox_root: Option<&Path>, absolute: &Path) -> PathBuf {
+    sandbox_root.map_or_else(
+        || absolute.to_path_buf(),
+        |root| root.join(absolute.strip_prefix(Path::new("/")).unwrap_or(absolute)),
+    )
 }
