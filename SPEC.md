@@ -345,14 +345,17 @@ trait ToolchainAdapter {
 
 **P3 Xcode probe（Q35）：** registry 仅含 `xcode-select -p`、`xcodebuild -version`、`xcodebuild -checkFirstLaunchStatus` 三条绝对只读命令，各最多一次，共用 `SIZETRAIL_NO_XCODE_PROBE`。固定 C locale 并移除 `DEVELOPER_DIR` / `SDKROOT` / `TOOLCHAINS` 与已知 `xcrun_*` 重定向变量。标准 CLT selection 是 `not_present`；未知版本（诊断同时保留 version + build id）与未完成 first-launch/license 是不同 degraded reason。P3 不运行 `xcrun` 或 `simctl`。当前 hosted 精确验证对为 `16.4 (16F6)` 与 `26.6 (17F113)`；矩阵漂移必须令测试失败并显式更新。
 
-**P4 CoreSimulator inventory（Q39）：** 仅增加
-`/usr/bin/xcrun simctl list --json devices` 与
-`/usr/bin/xcrun simctl list --json runtimes`，各最多一次、硬超时 30 秒。仅退出 0 且
-完整解析 JSON 成功；未知字段容忍，所需 identity 字段缺失形成 typed gap。超时只终止
-直接 child，不 `pkill` daemon、不重试。命令可能启动/连接 CoreSimulatorService 与
-simdiskimaged，此 daemon 状态变化不受 Seatbelt 覆盖，必须留在副作用表与矩阵中。
-排除完整 Devices root 时 devices probe 调用为 0。simctl stderr 原文只写 stderr，
-payload 只保留稳定 typed warning。
+**P4 CoreSimulator inventory（Q39、Q43）：** 永不执行 `xcrun simctl` 或 Xcode 的
+`usr/bin/simctl` wrapper。registry 先以固定 `PlistBuddy Print :CFBundleVersion` probe
+读取全局 CoreSimulator 版本；只有它与已验证 Xcode version/build 的精确映射相等，才直调
+固定 `PrivateFrameworks/.../Resources/bin/simctl` 的 devices/runtimes JSON，各最多一次、
+硬超时 30 秒。版本不等、unknown/not-ready、probe failure、timeout、malformed JSON 全部
+typed gap，且不等时两个 simctl 调用均为 0。直调路径是 technical preview 的私有入口，
+必须由 hosted exact-version lane 证明，任何路径、文件类型或版本漂移 fail closed。直接
+child，不 `pkill` daemon、不重试；它可能启动/连接 CoreSimulatorService 与
+simdiskimaged，必须进入 side-effect registry 并提供同一个关闭开关。用户排除完整
+Devices root 时 devices probe 调用为 0。simctl stderr 原文只写 stderr，payload 只保留
+稳定 typed warning。advice 可展示 `xcrun simctl`，但 SizeTrail 不执行。
 
 ### 5.3 验证矩阵（Q12）
 
@@ -534,13 +537,11 @@ enum Advice {
 **side-effect registry（Q17）：** 记录每个 probe 每次扫描的**最大调用次数**、关闭开关、
 硬 timeout 与已知副作用。registry 是数据，测试断言实际调用次数不超过声明值；timeout
 必须终止并回收子进程，且映射为 typed `unmeasurable`，不能令完整 JSON 缺失。
-P4 hosted 实测两条 `xcrun simctl list --json ...` 会尝试在 Darwin user temp directory
-（hosted 上为 `/private/var/folders/.../T`，不是脚本重定向的 `TMPDIR`）创建或刷新
-`xcrun_db-*` resolver cache、访问 controlling tty，并可能启动/连接 CoreSimulator daemon；
-这些必须进入 `doctor` JSON，
-不能把“vendor subcommand 语义只读”偷换成“child 没有 write syscall”。
-policy 清除 `xcrun_db` 与 `xcrun_nocache`，防止继承环境把 cache 写重定向到用户路径或
-强制刷新；不存在已验证的 xcrun 无写 cache 开关。
+P4 hosted 实测证明 `xcrun`/Xcode simctl wrapper 会写 cache/tty，且在 CoreSimulator
+版本不等时明文调用 `xcodebuild -runFirstLaunch`；因此 Q43 禁止执行 wrapper。生产只在
+固定 `PlistBuddy Print` probe 与已验证版本精确相等后直调固定 global simctl binary。
+registry/`doctor` 必须公开 direct simctl 可能启动或连接 CoreSimulator daemon；不能把
+“inventory 子命令语义只读”偷换成“未沙箱化 daemon 没有状态变化”。
 
 ### 8.3 明令禁止
 
@@ -793,12 +794,13 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | atime / 读诱发 metadata 写 | — | — | 是 | — | `VFS_ATIME_UPDATES_OFF` set+get |
 | autofs / mount trigger | — | — | sandbox 不证明 mount 状态 | — | `VFS_TRIGGER_RESOLVE_OFF` set+get；`EDEADLK`/失败令 root unknown |
 | nested mount 与 System/Data firmlink | — | — | — | — | 每对象比较真实 `(fsid,fileid)`，真实 fsid 改变即拒绝；synthetic boundary test |
-| 外部命令 / 子进程 | `Command` 仅 policy | — | 完整 scan sandbox 覆盖直接进程写尝试 | 是 | registry 精确锁定五条 Xcode probe；adapter 只能提交 `ProbeId`，不能提交程序、参数或用户输入 |
+| 外部命令 / 子进程 | `Command` 仅 policy | — | 完整 scan sandbox 覆盖直接进程写尝试 | 是 | registry 精确锁定六条 Xcode/CoreSimulator probe；adapter 只能提交 `ProbeId`，不能提交程序、参数或用户输入 |
 | `/usr/bin/xcode-select -p` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 生产 probe 测试实际执行；只判 selection，标准 CLT → `not_present` |
 | `/usr/bin/xcodebuild -version` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 仅 selection 为完整 Xcode 候选后运行；固定 locale/清除重定向环境；未知版本降级 |
 | `/usr/bin/xcodebuild -checkFirstLaunchStatus` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 仅已验证版本运行；非零为 `not_ready`，绝不调用写入型 `-runFirstLaunch` / `-license accept` |
-| `/usr/bin/xcrun simctl list --json devices` | `Command` 仅 policy | — | 产品 sandbox 中关闭 | 是，max 1、30s | 仅 Ready 后运行；退出 0 + 完整 JSON；UUID/dataPath 后缀验证；完整 Devices exclude 时调用为 0；known effects 包含 xcrun Darwin user temp directory/tty 与 CoreSimulator service |
-| `/usr/bin/xcrun simctl list --json runtimes` | `Command` 仅 policy | — | 产品 sandbox 中关闭 | 是，max 1、30s | 仅 Ready 后运行；runtime identity 校验；大小无 vendor 口径时 typed unmeasurable，不 raw delete；known effects 同上 |
+| `/usr/libexec/PlistBuddy ... Print :CFBundleVersion .../CoreSimulator.framework/.../Info.plist` | `Command` 仅 policy | — | 产品 sandbox 中关闭 | 是，max 1、10s | 固定只读参数；结果须与 verified Xcode/CoreSimulator 映射精确相等，否则两条 simctl 调用均为 0 |
+| `/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simctl list --json devices` | `Command` 仅 policy | — | 产品 sandbox 中关闭 | 是，max 1、30s | private exact-version 入口；退出 0 + 完整 JSON；UUID/dataPath 后缀验证；完整 Devices exclude 时调用为 0；known effect 仅 CoreSimulator service |
+| `/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simctl list --json runtimes` | `Command` 仅 policy | — | 产品 sandbox 中关闭 | 是，max 1、30s | private exact-version 入口；runtime identity 校验；大小无 vendor 口径时 typed unmeasurable，不 raw delete；known effect 同上 |
 | child stdout/stderr 与进程生命周期 | `Command` 仅 policy | — | 完整 scan sandbox 覆盖调用进程 | 是 | 固定输出由 policy 并行排空；registry 硬 timeout 会终止并回收子进程，单测断言 typed `timed_out` 与调用计数 |
 | `simctl` 诱发 CoreSimulatorService / simdiskimaged 状态变化 | — | — | 不覆盖 daemon | 是（只限制调用次数） | 已知读副作用；无自动重试、不 pkill daemon、可由 `SIZETRAIL_NO_XCODE_PROBE` 关闭；daemon 自身写 **未覆盖** |
 | 内置 TOML 规则解析 | 无外置 rules path；`include_str!` 编入 | — | scan sandbox 覆盖依赖运行路径 | — | schema `deny_unknown_fields`、无 command 字段、每条 rule + fixture 分类断言；toml crate 未执行路径仍不作全局保证 |

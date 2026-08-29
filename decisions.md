@@ -886,6 +886,43 @@ side-effect registry 与 `doctor` JSON。
 
 ---
 
+## Q43 — 禁止执行可间接 mutation 的 simctl wrapper
+
+**决策：SizeTrail 永不执行 `xcrun simctl` 或所选 Xcode 的 `usr/bin/simctl` wrapper。**
+P4 inventory 改为先以 registry 中固定的 `/usr/libexec/PlistBuddy -c
+"Print :CFBundleVersion" /Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/Info.plist`
+读取全局 CoreSimulator 版本；仅当它与已验证 Xcode version/build 对应的精确版本相等时，
+才由 registry 直接执行固定的
+`/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simctl`
+读取 devices/runtimes。版本缺失、不等、未知或 probe 失败时，动态 inventory typed
+unmeasurable，且两条 simctl 调用计数必须均为 0。advice 仍可把 Apple 的 `xcrun simctl`
+命令展示给用户，但 SizeTrail 不执行它。
+
+事实理由：2026-08-28 hosted `macos-15` 选择 Xcode `16.4 (16F6)`，其 wrapper
+SHA-256 为 `6dae42329c6cc5c2919065636a235890384c62ce3672edc10497fead2d52bc8b`，
+`EXPECTED_VERSION=1010.15`，而全局 CoreSimulator 为 `1051.17.8`。wrapper 明文在不等时
+调用 `xcodebuild -runFirstLaunch`；同一次 scan 此前的 `-checkFirstLaunchStatus` 已成功，证明
+该检查不能排除独立的 version guard。`macos-26` 的 Xcode `26.6 (17F113)` 为
+`1051.55 == 1051.55`；Xcode 27 beta 4 为 `1169.1 == 1169.1`。直调 binary 在通过精确
+兼容性门控后消除 wrapper 的 mutation 分支与检查后竞态；即使全局状态随后变化，调用也
+只能失败，不能触发 first-launch 安装。
+
+接受的代价：该 binary 位于 Apple `PrivateFrameworks`，不是公开稳定入口。因此它只能作为
+technical preview 的 exact-version adapter 实现：路径、文件类型、版本对与真实 hosted
+输出每次都要验证，任何漂移 fail closed，不把“当前可用”宣传成公开 API 稳定性。唯一登记的
+已知运行副作用缩为启动/连接 CoreSimulatorService / simdiskimaged；Q42 的 xcrun cache 与
+bash tty 观测保留为否决 wrapper 的证据，不再是生产命令的副作用。
+
+被否：把 `xcodebuild -checkFirstLaunchStatus == 0` 当充分条件（hosted 反例已否定）；继续
+执行 wrapper 并只登记 tty/cache；给 wrapper 加 sandbox（macOS 13 best-effort 无稳定机制，
+且 mutation 尝试本身违反契约）；在预检后仍执行 wrapper（保留 TOCTOU）；删除所有动态
+CoreSimulator inventory（不满足 Q29/Q39 选择的深 adapter）。
+
+影响：Q39 的两条生产命令被本条取代；Q42 的 sandbox 证据分层继续成立；`SPEC.md` §4、
+§8.2、§10.4、§12.1；side-effect registry、adapter typed gap 与 hosted matrix。
+
+---
+
 ## 附录 A — 实测环境基线
 
 采集于 2026-08-26，作为规则表量级参考与回归基线：
