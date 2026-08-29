@@ -5,6 +5,7 @@ use serde::Serialize;
 use crate::model::{Advice, Finding, Measurement, SignalObservation};
 use crate::policy::PolicyCtx;
 
+pub mod homebrew;
 pub mod xcode;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
