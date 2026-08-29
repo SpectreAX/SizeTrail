@@ -816,6 +816,7 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | atime / 读诱发 metadata 写 | — | — | 是 | — | `VFS_ATIME_UPDATES_OFF` set+get |
 | autofs / mount trigger | — | — | sandbox 不证明 mount 状态 | — | `VFS_TRIGGER_RESOLVE_OFF` set+get；`EDEADLK`/失败令 root unknown |
 | nested mount 与 System/Data firmlink | — | — | — | — | 每对象比较真实 `(fsid,fileid)`，真实 fsid 改变即拒绝；synthetic boundary test |
+| store 内符号链接与 `Other` 条目 | safe 元数据读取；永不 `children` | `getattrlist` 精确符号集 | TreeSnapshot + 逐子命令 sandbox | — | Q51 Xcode fixture 断言链接只贡献自身 logical/allocated footprint；撤销为 store 级 Err 时同一测试转红。两类均复用 `Root::measure_object` 的 `FSOPT_NOFOLLOW_ANY` 路径，绝不跟随目标 |
 | 外部命令 / 子进程 | `Command` 仅 policy | — | sandbox 逐子命令覆盖直接进程写尝试 | 是 | registry 精确锁定六条 Xcode/CoreSimulator probe；adapter 只能提交 `ProbeId`，不能提交程序、参数或用户输入 |
 | `/usr/bin/xcode-select -p` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 生产 probe 测试实际执行；只判 selection，标准 CLT → `not_present` |
 | `/usr/bin/xcodebuild -version` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 仅 selection 为完整 Xcode 候选后运行；固定 locale/清除重定向环境；未知版本降级 |

@@ -599,16 +599,13 @@ fn measure_store(
             }
             match entry.kind {
                 RootEntryKind::Directory => stack.push(entry.path),
-                RootEntryKind::File => {
+                RootEntryKind::File | RootEntryKind::Symlink | RootEntryKind::Other => {
                     let measured = root.measure_object(&entry.path)?;
                     let value = objects.entry(measured.identity).or_insert((measured, 0));
                     value.1 = value
                         .1
                         .checked_add(1)
                         .ok_or_else(|| io::Error::other("hardlink count overflow"))?;
-                }
-                RootEntryKind::Symlink | RootEntryKind::Other => {
-                    return Err(io::Error::other("store contains an unsupported entry kind"));
                 }
             }
         }

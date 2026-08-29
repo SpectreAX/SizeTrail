@@ -453,6 +453,66 @@ mod tests {
     }
 
     #[test]
+    fn xcode_store_symlink_contributes_only_its_own_footprint() {
+        let home = fixture_home();
+        let root = Root::open(&home).expect("fixture root must initialize");
+        let adapter = xcode::XcodeAdapter::new(&root, &[], Ok(false));
+        let state = AdapterState::Ready {
+            version: "16.4 (16F6)".to_owned(),
+        };
+        let policies = inventory_policies(MISMATCHED_CORE_SIMULATOR);
+        let mut ctx = PolicyCtx::for_test(&policies);
+
+        let inventory = adapter.inventory(&mut ctx, &state);
+        let build = root
+            .path()
+            .join("Library/Developer/Xcode/DerivedData/App/Build");
+        let artifact = root
+            .measure_object(&build.join("artifact.bin"))
+            .expect("fixture artifact must be measurable");
+        let link = root
+            .measure_object(&build.join("artifact-link.bin"))
+            .expect("fixture symlink itself must be measurable without following it");
+        let item = inventory
+            .items
+            .iter()
+            .find(|item| item.rule_id == "xcode.derived_data_build")
+            .expect("a normal symlink must not make the entire DerivedData store unmeasurable");
+
+        let logical_bytes = item.measurements.iter().find_map(|measurement| {
+            match (&measurement.basis, &measurement.value) {
+                (
+                    crate::model::MeasurementBasis::LogicalSize,
+                    crate::model::MeasurementValue::ExactBytes { bytes },
+                ) => Some(*bytes),
+                _ => None,
+            }
+        });
+        let allocated_bytes = item.measurements.iter().find_map(|measurement| {
+            match (&measurement.basis, &measurement.value) {
+                (
+                    crate::model::MeasurementBasis::AllocatedFootprint,
+                    crate::model::MeasurementValue::ExactBytes { bytes },
+                ) => Some(*bytes),
+                _ => None,
+            }
+        });
+        assert_eq!(
+            logical_bytes,
+            artifact.logical_bytes.checked_add(link.logical_bytes),
+            "the symlink must contribute its own metadata length, not the target file twice"
+        );
+        assert_eq!(
+            allocated_bytes,
+            artifact
+                .allocated_bytes
+                .zip(link.allocated_bytes)
+                .and_then(|(artifact, link)| artifact.checked_add(link)),
+            "the symlink must contribute only its own allocated footprint"
+        );
+    }
+
+    #[test]
     fn a_coresimulator_version_mismatch_keeps_static_inventory_but_never_calls_simctl() {
         let home = fixture_home();
         let root = Root::open(&home).expect("fixture root must initialize");
