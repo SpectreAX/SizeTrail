@@ -716,7 +716,9 @@ sizetrail completion <shell>         生成补全脚本（仅打印 stdout）
 
 `scan` / `doctor` 的开关：`--no-xcode`、`--no-homebrew`、`--no-docker`、`--exclude <path>`（可重复）。
 
-全局：`--debug`、`--no-color`、`--root <path>`（测试用）。
+全局：`--debug`、`--no-color`、`--version`、`--root <path>`（测试用）。
+
+`--version` 报告构建版本（Q48）。`scan` 与 `doctor` 文档在顶层携带 `tool_version`，与 `schema_version` 并列 —— 二者演进节奏不同，v0.1.1 的 schema 未变而构建已变。它不属于 `environment`（与主机无关，不参与 fixture 环境注入），也不属于 payload（不是被计量的数据）。`--version` 不读文件系统、不起子进程，因此不受下述探测约束。
 
 **裸命令不自动探测。** 因为「读」也有副作用 —— 不应自动启动 CoreSimulatorService、连接 Docker daemon 或运行 Homebrew。**所有有副作用的探测都要求显式子命令。**
 

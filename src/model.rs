@@ -7,6 +7,7 @@ use serde::Serialize;
 use crate::fsx::CapacityValue;
 
 pub const SCHEMA_VERSION: &str = "0.1.0-unstable";
+pub const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const FINDING_ID_VERSION: &str = "f1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,6 +80,10 @@ fn is_normalized_absolute(path: &Path) -> bool {
 #[derive(Debug, Serialize)]
 pub struct ScanDocument {
     pub schema_version: &'static str,
+    /// Peer of `schema_version` rather than part of `environment`: the build is not host-dependent,
+    /// so it must not be replaced by the fixture's injected environment, and the two versions
+    /// advance on different schedules (Q48).
+    pub tool_version: &'static str,
     pub environment: EnvironmentEnvelope,
     pub payload: ScanPayload,
 }

@@ -24,7 +24,7 @@ use sizetrail::scan::{
 
 fn command() -> Command {
     Command::new("sizetrail")
-        .disable_version_flag(true)
+        .version(env!("CARGO_PKG_VERSION"))
         .arg(
             Arg::new("root")
                 .long("root")
@@ -299,6 +299,7 @@ fn doctor(matches: &clap::ArgMatches, arguments: &clap::ArgMatches) -> Result<u8
         );
     let report = serde_json::json!({
         "schema_version": sizetrail::model::SCHEMA_VERSION,
+        "tool_version": sizetrail::model::TOOL_VERSION,
         "root": {"status": if root_ready { "readable" } else { "unmeasurable" }},
         "launcher_hint": launcher_hint(),
         "side_effect_policy": side_effect_policy(),

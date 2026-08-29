@@ -4,7 +4,7 @@ use crate::capacity::CapacityReport;
 use crate::fsx::Root;
 use crate::model::{
     CoverageGap, CoverageGapReason, EnvironmentEnvelope, Finding, MeasurementPlane, RegionReport,
-    RegionStatus, SCHEMA_VERSION, ScanDocument, ScanPayload, normalize_findings,
+    RegionStatus, SCHEMA_VERSION, ScanDocument, ScanPayload, TOOL_VERSION, normalize_findings,
 };
 use crate::policy::PolicyCtx;
 
@@ -253,6 +253,7 @@ pub fn scan(
 
     ScanDocument {
         schema_version: SCHEMA_VERSION,
+        tool_version: TOOL_VERSION,
         environment,
         payload: ScanPayload {
             capacity: capacity.values,

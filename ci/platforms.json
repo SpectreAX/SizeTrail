@@ -1,5 +1,5 @@
 {
-  "release": "v0.1.1 technical preview",
+  "release": "v0.1.2 technical preview",
   "api_baseline": "macOS 13 best effort, not runtime-tested in hosted CI",
   "runtime_lanes": [
     {

@@ -76,3 +76,43 @@ fn exact_existing_exclude_is_reported_without_becoming_an_error() {
             .any(|gap| gap["status"] == "excluded_by_user")
     );
 }
+
+/// Q48: a published tarball must be able to say which build it is. Without this, the v0.1.0 defect
+/// notice telling holders to upgrade is unactionable, and bug reports arrive without a build.
+#[test]
+fn the_binary_reports_its_build_version_on_the_cli_and_in_json() {
+    let expected = env!("CARGO_PKG_VERSION");
+
+    let flag = cargo_bin_cmd!("sizetrail")
+        .arg("--version")
+        .output()
+        .expect("version flag must run");
+    assert!(flag.status.success(), "--version must exit cleanly");
+    let printed = String::from_utf8_lossy(&flag.stdout);
+    assert!(
+        printed.contains(expected),
+        "--version printed {printed:?} without the build version"
+    );
+
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    let scan = cargo_bin_cmd!("sizetrail")
+        .args(["scan", "--json", "--no-xcode", "--root"])
+        .arg(fixture.path())
+        .output()
+        .expect("scan must run");
+    let document: Value =
+        serde_json::from_slice(&scan.stdout).expect("scan must emit a JSON document");
+    assert_eq!(document["tool_version"], expected);
+    assert_ne!(
+        document["tool_version"], document["schema_version"],
+        "the build version must be distinguishable from the schema version"
+    );
+
+    let doctor = cargo_bin_cmd!("sizetrail")
+        .args(["doctor", "--json", "--no-xcode"])
+        .output()
+        .expect("doctor must run");
+    let diagnosis: Value =
+        serde_json::from_slice(&doctor.stdout).expect("doctor must emit a JSON document");
+    assert_eq!(diagnosis["tool_version"], expected);
+}

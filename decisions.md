@@ -1026,6 +1026,32 @@ v0.1.0 发布后审计发现两处公开出口不在任何机械检查范围内�
 
 ---
 
+## Q48 — 二进制必须能自报构建版本
+
+Q22 穷举 CLI 面时没有列 `--version`，实现遂以 `disable_version_flag(true)` 忠实对齐。核验 v0.1.1 时发现该枚举漏了一个必要能力：**二进制无法说出自己是哪一个构建。**
+
+`--version` 不存在，`--help` 里没有，`scan` JSON 的 `tool_versions` 只装外部工具版本（空对象），`doctor` 也不报。唯一近似物是 `schema_version = 0.1.0-unstable`，而它在 v0.1.1 里仍是这个值 —— 这本身正确（schema 未变），但极易被误当成构建版本。
+
+这个缺口在 Q47 之后变得有后果：v0.1.0 的 notes 让持有者改用 v0.1.1，而他们无法判断手里是哪一个，只能重新下载比对校验和。任何 bug 报告也会缺构建标识。
+
+**决策：CLI 面增加 `--version`；`scan` 与 `doctor` 文档在顶层增加 `tool_version`，与 `schema_version` 并列。**
+
+并列而非塞进 `environment.tool_versions` 是有意的：
+
+- 它不是环境信息 —— 完全由二进制决定，与主机无关，因此不应参与 fixture 的环境注入。
+- 它不是 payload —— 不是被计量的数据。
+- 与 `schema_version` 并列恰好让二者的区别可见，而这正是当前的混淆点。
+
+代价是每次版本 bump 都会让 `docs/generated` 漂移。这不是缺点：漂移门禁会强制重生成，与 `platforms.json` 的 release 字段同理。
+
+`--version` 不引入探测，不违反 Q22 的「所有有副作用的探测都要求显式子命令」—— 它不读文件系统也不起子进程。
+
+被否：只加 `--version` 不进 JSON（脚本消费者与 bug 报告拿不到）；放进 `environment.tool_versions`（把自身与被探测的外部工具混为一类，且会被 fixture 注入掩盖）；靠 `schema_version` 兼任（schema 与构建的演进节奏不同，v0.1.1 已经证明）。
+
+影响：`SPEC.md` §11（CLI 面）、`src/main.rs`、`src/model.rs`、`docs/generated`。
+
+---
+
 ## 附录 A — 实测环境基线
 
 采集于 2026-08-26，作为规则表量级参考与回归基线：
