@@ -13,3 +13,6 @@
 
 # macOS
 .DS_Store
+# 例外：fixture 里的 .DS_Store 是被测条件本身。散落在 DerivedData / Archives /
+# iOS DeviceSupport 里的非目录条目曾使整个通配展开中断，丢掉该类别的全部 store。
+!tests/fixtures/**/.DS_Store
