@@ -956,6 +956,36 @@ CoreSimulator inventory（不满足 Q29/Q39 选择的深 adapter）。
 
 ---
 
+## Q45 — CoreSimulator 版本不匹配时仍静态计量 device set
+
+**决策：CoreSimulator 精确版本门控失败时，仍按 `xcode.simulator_device` 已声明的 `paths` 静态展开并计量每个 device set，另附 `simulator_identity_unavailable` typed gap 说明设备身份与 runtime 关联不可得。**
+
+Q44 的 lane 首轮就给出了证据（2026-08-29，hosted runner）：
+
+| | macOS 15 / Xcode 16.4 | macOS 26 / Xcode 26.6 |
+|---|---|---|
+| 磁盘上的 device 目录 | 133 | 61 |
+| 报告的 simulator finding | **0** | device 与 runtime 均报告 |
+| typed gap | `core_simulator_version_mismatch` | `runtime_size_unavailable` |
+
+这不是 truth contract 违规 —— 133 个目录带着覆盖 `xcode.simulator_inventory` 的 typed gap，region 记 `unmeasurable`，结构化 `coverage_gaps` 在按设计工作。但 Xcode 16.4 是 `macos-15` image 的默认 Xcode，也是常见开发者配置；在这类机器上产品实际只报告 `DerivedData`。
+
+判据是：**计量本身是文件系统的，只有枚举与身份识别需要那个版本门控的 binary。** macOS 26 报出的路径就是普通目录（`~/Library/Developer/CoreSimulator/Devices/<UUID>`），而该规则早已声明 `paths = ["~/Library/Developer/CoreSimulator/Devices/*"]`，`expand_home_pattern` 也已支持该展开。因此版本不匹配丢掉整个类别，丢的是本来不需要那个 binary 就能量出的字节。
+
+**不伪造身份。** 静态发现的 device set 没有设备名、没有 runtime 关联、没有 availability，只用现有的 `InventoryIdentity::Path`，因为那才是已知的全部事实。**不新增没人读的 identity 变体** —— 那是为将来预留抽象（Q11-A）。UUID 目录名不是设备名，公开 API 也没有 UUID → runtime 的映射。
+
+**runtime 继续受门控。** 它们位于 root 之外的 `/Library/Developer/CoreSimulator/`，且区分 runtime 与其承载卷需要 simctl。现有 gap 使这一点保持诚实。这是刻意边界，不是遗漏。
+
+红线 5 不变：新 gap 不分解任何区间，不与观测信号相加，区间仍不得收敛。
+
+**Q44 断言 A 随之改为按类别。** 「至少一条 finding」在 133 个 device set 缺失时照样通过，与 §9.0 想防的是同一种 fail-open 形状：门禁必须断言被测能力真的执行了。改为：磁盘上存在 device 目录时，要么该类别被报告，要么存在覆盖它的 typed gap；两者皆无则失败。
+
+被否：保持现状（在常见 Xcode 上丢弃可计量字节）；把 runner 的 CoreSimulator 版本补进 pin（把正确性绑定到 image 轮换，Q44 已否决同一形状）；由目录名伪造设备身份；把 runtime 也静态枚举（身份需 simctl 且位于 root 之外）。
+
+影响：`SPEC.md` §4 与 §10.2 第 14 项；`src/adapters/xcode.rs`；新增 gap reason。
+
+---
+
 ## 附录 A — 实测环境基线
 
 采集于 2026-08-26，作为规则表量级参考与回归基线：

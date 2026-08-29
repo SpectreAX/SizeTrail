@@ -15,6 +15,7 @@
 
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
+use std::path::Path;
 use std::process::Command;
 
 use assert_cmd::cargo::cargo_bin_cmd;
@@ -116,6 +117,40 @@ fn real_xcode_storage_produces_structurally_valid_findings() {
          result here means the probe-to-inventory path did not run, not that storage is absent; {}",
         diagnostics(&document)
     );
+
+    // Per category, not per total. "At least one finding" passed on a host where 133 simulator
+    // device sets went unreported, because a single DerivedData finding satisfied it (Q45).
+    let devices_on_disk = std::fs::read_dir(
+        Path::new(&std::env::var("HOME").expect("HOME must be set"))
+            .join("Library/Developer/CoreSimulator/Devices"),
+    )
+    .map(|entries| {
+        entries
+            .flatten()
+            .filter(|entry| entry.path().is_dir())
+            .count()
+    })
+    .unwrap_or(0);
+    if devices_on_disk > 0 {
+        let reported = findings
+            .iter()
+            .any(|finding| finding["rule_id"] == "xcode.simulator_device");
+        let declared = document["payload"]["coverage_gaps"]
+            .as_array()
+            .expect("coverage gaps must be an array")
+            .iter()
+            .any(|gap| {
+                gap["region"]
+                    .as_str()
+                    .is_some_and(|region| region.starts_with("xcode.simulator"))
+            });
+        assert!(
+            reported || declared,
+            "{devices_on_disk} simulator device sets exist on disk but were neither measured nor \
+             covered by a typed gap, so their bytes are silently missing; {}",
+            diagnostics(&document)
+        );
+    }
 
     for finding in findings {
         assert!(

@@ -350,7 +350,12 @@ trait ToolchainAdapter {
 读取全局 CoreSimulator 版本；只有它与已验证 Xcode version/build 的精确映射相等，才直调
 固定 `PrivateFrameworks/.../Resources/bin/simctl` 的 devices/runtimes JSON，各最多一次、
 硬超时 30 秒。版本不等、unknown/not-ready、probe failure、timeout、malformed JSON 全部
-typed gap，且不等时两个 simctl 调用均为 0。直调路径是 technical preview 的私有入口，
+typed gap，且不等时两个 simctl 调用均为 0。**但版本不等不得丢弃 device set 的字节（Q45）：**
+计量本身是文件系统的，只有枚举与身份识别需要该 binary，因此版本不等时仍按
+`xcode.simulator_device` 已声明的 `paths` 静态展开并计量每个 device set，另附
+`simulator_identity_unavailable` typed gap 说明设备名、runtime 关联与 availability 不可得。
+不得由 UUID 目录名伪造身份。runtime 继续受门控：它们位于 root 之外且区分 runtime 与其承载
+卷需要 simctl，这是刻意边界。直调路径是 technical preview 的私有入口，
 必须由 hosted exact-version lane 证明，任何路径、文件类型或版本漂移 fail closed。直接
 child，不 `pkill` daemon、不重试；它可能启动/连接 CoreSimulatorService 与
 simdiskimaged，必须进入 side-effect registry 并提供同一个关闭开关。用户排除完整
@@ -646,7 +651,7 @@ GA runner 记录 fixture benchmark，但**只发布「该 runner image + fixture
 11. **规则表完整性测试** — 遍历全部内置规则：`evidence` 非空、正交字段合法、`adapter` 是已编译 id、`paths` 非空、存在对应 fixture、无 `override_reason` 缺失。
 12. **advice 类型测试** — 断言 `destructive` advice 在类型上无法进入 probe runner；断言 advice 命令从不含 `--force` / `--yes` / shell 管道；断言命令不含任何用户输入。
 13. **finding ID 稳定性测试** — 断言 ID 与发现顺序无关；断言 HOME 变化下 digest 不变；断言算法版本变更时 `--from` 校验失败。
-14. **真实环境测试（Q44，non-blocking lane 专用）** — 在 runner 真实 `$HOME` 上执行真实 scan，拆成两条互不替代的断言。**A 文件系统侧归因**：预建模拟器 device set、runtime 与现场 build 的 `DerivedData` 必须产生结构正确的 findings。**B 版本门控降级**：版本不匹配时必须干净降级为 `unknown_version`，既不使 scan 失败，也不执行 simctl wrapper。两条禁止：**不得断言字节值**（真实体积非确定，只断言 `floor ≤ ceiling`、区间不收敛、每个数字带 basis、无跨 basis 求和、typed gap 合法，且不进第 6 项的逐字节 payload fixture）；**不得用作零写门禁**（Xcode/CoreSimulator 后台服务会独立修改这些目录，快照断言按构造 flaky，而 flaky 门禁的结局是被关掉且声明留下）。
+14. **真实环境测试（Q44，non-blocking lane 专用）** — 在 runner 真实 `$HOME` 上执行真实 scan，拆成两条互不替代的断言。**A 文件系统侧归因（按类别，不按总数）**：磁盘上存在 device 目录时，要么该类别被报告，要么存在覆盖它的 typed gap，两者皆无则失败。「至少一条 finding」是 fail-open —— 它曾在 133 个 device set 缺失时通过（Q45）。**B 版本门控降级**：版本不匹配时必须干净降级为 `unknown_version`，既不使 scan 失败，也不执行 simctl wrapper。两条禁止：**不得断言字节值**（真实体积非确定，只断言 `floor ≤ ceiling`、区间不收敛、每个数字带 basis、无跨 basis 求和、typed gap 合法，且不进第 6 项的逐字节 payload fixture）；**不得用作零写门禁**（Xcode/CoreSimulator 后台服务会独立修改这些目录，快照断言按构造 flaky，而 flaky 门禁的结局是被关掉且声明留下）。
 
 ### 10.3 CI 门禁
 

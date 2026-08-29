@@ -21,7 +21,7 @@ use crate::policy::{
     XCODE_SELECT_DEVELOPER_DIR, XCODE_SIMCTL_DEVICES, XCODE_SIMCTL_RUNTIMES,
     XCODE_XCODEBUILD_VERSION,
 };
-use crate::rules::builtin_rules;
+use crate::rules::{Rule, builtin_rules};
 
 pub const SELECT_DEVELOPER_DIR: ProbeId = XCODE_SELECT_DEVELOPER_DIR;
 pub const XCODEBUILD_VERSION: ProbeId = XCODE_XCODEBUILD_VERSION;
@@ -173,7 +173,7 @@ impl XcodeAdapter<'_> {
         visit(static_inventory);
 
         if let Err(reason) = core_simulator_compatible(ctx, state) {
-            visit(Inventory {
+            let mut devices = Inventory {
                 gaps: vec![InventoryGap {
                     region: "xcode.simulator_inventory",
                     path: None,
@@ -182,7 +182,9 @@ impl XcodeAdapter<'_> {
                     errno: None,
                 }],
                 ..Inventory::default()
-            });
+            };
+            self.inventory_devices_static(&mut devices);
+            visit(devices);
             return;
         }
 
@@ -218,49 +220,7 @@ impl XcodeAdapter<'_> {
                 "xcode.derived_data_build" | "xcode.archives" | "xcode.device_support"
             )
         }) {
-            let mut paths = BTreeSet::new();
-            for pattern in &rule.paths {
-                match expand_home_pattern(self.root, pattern, self.excludes) {
-                    Ok(matches) => paths.extend(matches),
-                    Err((path, error)) => inventory.gaps.push(io_gap(
-                        "xcode",
-                        &path,
-                        InventoryStage::ListDirectory,
-                        &error,
-                    )),
-                }
-            }
-            for path in paths {
-                match measure_store(self.root, &path, self.excludes, volume_has_snapshots) {
-                    Ok((measurements, observations)) => {
-                        let Ok(normalized_path) = normalized_report_path(self.root.path(), &path)
-                        else {
-                            inventory.gaps.push(InventoryGap {
-                                region: "xcode",
-                                path: Some(path),
-                                reason: InventoryGapReason::TraversalFailed,
-                                stage: Some(InventoryStage::NormalizePath),
-                                errno: None,
-                            });
-                            continue;
-                        };
-                        inventory.items.push(InventoryItem {
-                            rule_id: rule.id.clone(),
-                            normalized_path,
-                            path: Some(path),
-                            measurements,
-                            observations,
-                            identity: InventoryIdentity::Path,
-                        });
-                    }
-                    Err(error) => inventory.gaps.push(io_gap(
-                        "xcode",
-                        &path,
-                        InventoryStage::MeasureObject,
-                        &error,
-                    )),
-                }
-            }
+            self.expand_rule(rule, volume_has_snapshots, &mut inventory);
         }
 
         inventory.items.sort_by(|left, right| {
@@ -269,6 +229,87 @@ impl XcodeAdapter<'_> {
                 .then_with(|| left.normalized_path.cmp(&right.normalized_path))
         });
         Ok(inventory)
+    }
+
+    fn expand_rule(&self, rule: &Rule, volume_has_snapshots: bool, inventory: &mut Inventory) {
+        let mut paths = BTreeSet::new();
+        for pattern in &rule.paths {
+            match expand_home_pattern(self.root, pattern, self.excludes) {
+                Ok(matches) => paths.extend(matches),
+                Err((path, error)) => inventory.gaps.push(io_gap(
+                    "xcode",
+                    &path,
+                    InventoryStage::ListDirectory,
+                    &error,
+                )),
+            }
+        }
+        for path in paths {
+            match measure_store(self.root, &path, self.excludes, volume_has_snapshots) {
+                Ok((measurements, observations)) => {
+                    let Ok(normalized_path) = normalized_report_path(self.root.path(), &path)
+                    else {
+                        inventory.gaps.push(InventoryGap {
+                            region: "xcode",
+                            path: Some(path),
+                            reason: InventoryGapReason::TraversalFailed,
+                            stage: Some(InventoryStage::NormalizePath),
+                            errno: None,
+                        });
+                        continue;
+                    };
+                    inventory.items.push(InventoryItem {
+                        rule_id: rule.id.clone(),
+                        normalized_path,
+                        path: Some(path),
+                        measurements,
+                        observations,
+                        identity: InventoryIdentity::Path,
+                    });
+                }
+                Err(error) => inventory.gaps.push(io_gap(
+                    "xcode",
+                    &path,
+                    InventoryStage::MeasureObject,
+                    &error,
+                )),
+            }
+        }
+    }
+
+    /// Q45: a device set's bytes are measurable without the version-pinned binary, which is only
+    /// needed to enumerate devices and name them. Losing the whole category on a version miss
+    /// discards measurable storage, so measure the paths and declare the missing identity.
+    fn inventory_devices_static(&self, inventory: &mut Inventory) {
+        let Ok(rules) = builtin_rules() else {
+            inventory.gaps.push(InventoryGap::diagnostic(
+                "xcode",
+                InventoryGapReason::RuleSetInvalid,
+            ));
+            return;
+        };
+        let Some(rule) = rules
+            .iter()
+            .find(|rule| rule.id == "xcode.simulator_device")
+        else {
+            inventory.gaps.push(InventoryGap::diagnostic(
+                "xcode",
+                InventoryGapReason::RuleSetInvalid,
+            ));
+            return;
+        };
+
+        let measured_before = inventory.items.len();
+        self.expand_rule(rule, self.volume_has_snapshots.unwrap_or(false), inventory);
+        if inventory.items.len() > measured_before {
+            inventory.gaps.push(InventoryGap {
+                region: "xcode.simulator_devices",
+                path: None,
+                reason: InventoryGapReason::SimulatorIdentityUnavailable,
+                stage: Some(InventoryStage::ToolchainProbe),
+                errno: None,
+            });
+        }
     }
 
     fn inventory_devices(&self, ctx: &mut PolicyCtx<'_>, inventory: &mut Inventory) {

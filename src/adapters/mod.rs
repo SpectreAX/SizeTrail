@@ -101,6 +101,7 @@ pub enum InventoryGapReason {
     TraversalFailed,
     InvalidToolOutput,
     CoreSimulatorVersionMismatch,
+    SimulatorIdentityUnavailable,
     RuntimeSizeUnavailable,
     TimedOut,
     RuleSetInvalid,
@@ -160,8 +161,8 @@ pub trait ToolchainAdapter {
 #[cfg(test)]
 mod tests {
     use super::{
-        AdapterDegradedReason, AdapterState, InventoryGapReason, InventoryStage, ToolchainAdapter,
-        xcode,
+        AdapterDegradedReason, AdapterState, InventoryGapReason, InventoryIdentity, InventoryStage,
+        ToolchainAdapter, xcode,
     };
     use crate::fsx::Root;
     use crate::policy::{PolicyCtx, ProbePolicy, ReadOnlyCommand};
@@ -477,6 +478,57 @@ mod tests {
                 .any(|gap| { gap.reason == InventoryGapReason::CoreSimulatorVersionMismatch })
         );
         assert_eq!(ctx.count(xcode::CORE_SIMULATOR_VERSION), 1);
+        assert_eq!(ctx.count(xcode::SIMCTL_DEVICES), 0);
+        assert_eq!(ctx.count(xcode::SIMCTL_RUNTIMES), 0);
+    }
+
+    /// Q45: the bytes under a device set are measurable without the version-pinned binary, which
+    /// is only needed to enumerate devices and name them. A hosted lane found 133 device
+    /// directories reported as nothing at all on Xcode 16.4.
+    #[test]
+    fn a_version_mismatch_still_measures_device_sets_without_claiming_their_identity() {
+        let home = fixture_home();
+        let root = Root::open(&home).expect("fixture root must initialize");
+        let adapter = xcode::XcodeAdapter::new(&root, &[], Ok(false));
+        let state = AdapterState::Ready {
+            version: "16.4 (16F6)".to_owned(),
+        };
+        let policies = inventory_policies(MISMATCHED_CORE_SIMULATOR);
+        let mut ctx = PolicyCtx::for_test(&policies);
+
+        let inventory = adapter.inventory(&mut ctx, &state);
+
+        let devices = inventory
+            .items
+            .iter()
+            .filter(|item| item.rule_id == "xcode.simulator_device")
+            .collect::<Vec<_>>();
+        assert!(
+            !devices.is_empty(),
+            "a device set on disk must still be measured when the version pin misses; gaps={:?}",
+            inventory.gaps
+        );
+        for device in &devices {
+            assert!(
+                matches!(device.identity, InventoryIdentity::Path),
+                "a statically discovered device set has no name, runtime, or availability, so it \
+                 must not carry a fabricated identity: {:?}",
+                device.identity
+            );
+            assert!(
+                !device.measurements.is_empty(),
+                "a measured device set without measurements explains nothing"
+            );
+        }
+        assert!(
+            inventory
+                .gaps
+                .iter()
+                .any(|gap| gap.reason == InventoryGapReason::SimulatorIdentityUnavailable),
+            "the missing device identity must be declared, not silently omitted; gaps={:?}",
+            inventory.gaps
+        );
+
         assert_eq!(ctx.count(xcode::SIMCTL_DEVICES), 0);
         assert_eq!(ctx.count(xcode::SIMCTL_RUNTIMES), 0);
     }
