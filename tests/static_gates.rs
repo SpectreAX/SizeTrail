@@ -6,6 +6,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use tempfile::TempDir;
 
@@ -531,8 +532,16 @@ fn write_fake_binary(directory: &Path, name: &str, body: &str) -> PathBuf {
     binary
 }
 
+fn sandbox_gate_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("sandbox gates must not overlap their unified-log observers")
+}
+
 #[test]
 fn sandbox_gate_rejects_a_swallowed_hard_coded_write() {
+    let _serial = sandbox_gate_lock();
     let fixture = TempDir::new().expect("sandbox fixture must be created");
     let fake_binary = write_fake_binary(
         fixture.path(),
@@ -554,6 +563,7 @@ fn sandbox_gate_rejects_a_swallowed_hard_coded_write() {
 
 #[test]
 fn sandbox_gate_rejects_a_scan_that_measured_nothing() {
+    let _serial = sandbox_gate_lock();
     let fixture = TempDir::new().expect("sandbox fixture must be created");
     let fake_binary = write_fake_binary(
         fixture.path(),
@@ -573,6 +583,7 @@ fn sandbox_gate_rejects_a_scan_that_measured_nothing() {
 
 #[test]
 fn sandbox_gate_disables_registered_external_probes_without_skipping_measurement() {
+    let _serial = sandbox_gate_lock();
     let fixture = TempDir::new().expect("sandbox fixture must be created");
     let source = fixture.path().join("probe_boundary.c");
     let fake_binary = fixture.path().join("sizetrail-probe-boundary");
