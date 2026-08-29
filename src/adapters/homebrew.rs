@@ -7,7 +7,10 @@ use crate::adapters::{
     InventoryIdentity, InventoryItem, InventoryStage, ToolchainAdapter,
 };
 use crate::fsx::{Root, RootError};
-use crate::model::{Advice, Finding, finding_id, normalize_findings, normalized_report_path};
+use crate::model::{
+    Advice, AdviceImpact, CommandAdvice, Finding, RevealAdvice, finding_id, normalize_findings,
+    normalized_report_path,
+};
 use crate::policy::PolicyCtx;
 use crate::rules::builtin_rules;
 
@@ -154,7 +157,7 @@ impl ToolchainAdapter for HomebrewAdapter<'_> {
             let rule = rules
                 .get(&item.rule_id)
                 .ok_or(InventoryGapReason::RuleSetInvalid)?;
-            findings.push(Finding {
+            let mut finding = Finding {
                 id: finding_id("homebrew", &item.rule_id, &item.normalized_path)
                     .map_err(|_| InventoryGapReason::RuleSetInvalid)?,
                 adapter_id: "homebrew".to_owned(),
@@ -170,14 +173,28 @@ impl ToolchainAdapter for HomebrewAdapter<'_> {
                 measurements: item.measurements.clone(),
                 observations: item.observations.clone(),
                 advice: Vec::new(),
-            });
+            };
+            finding.advice = self.advise(&finding);
+            findings.push(finding);
         }
         normalize_findings(&mut findings);
         Ok(findings)
     }
 
-    fn advise(&self, _finding: &Finding) -> Vec<Advice> {
-        Vec::new()
+    fn advise(&self, finding: &Finding) -> Vec<Advice> {
+        if finding.rule_id.starts_with("homebrew.cache_") {
+            vec![Advice::Command(CommandAdvice {
+                display_command: "HOMEBREW_NO_AUTOREMOVE=1 brew cleanup".to_owned(),
+                impact: AdviceImpact::Destructive,
+                explanation: "Homebrew cleanup deletes data and may otherwise run autoremove. Its `-n` mode is not a reliable preview because it omits unreferenced downloads and cache-database cleanup.".to_owned(),
+                reliable_preview_available: false,
+            })]
+        } else {
+            vec![Advice::Reveal(RevealAdvice {
+                normalized_path: finding.normalized_path.clone(),
+                recovery_semantics: finding.evidence.clone(),
+            })]
+        }
     }
 }
 

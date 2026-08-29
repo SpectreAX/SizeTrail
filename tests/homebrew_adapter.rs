@@ -8,7 +8,9 @@ use sizetrail::adapters::{
     AdapterDegradedReason, AdapterState, InventoryIdentity, ToolchainAdapter, homebrew,
 };
 use sizetrail::fsx::Root;
-use sizetrail::model::{MeasurementBasis, MeasurementValue, ObservationRelation, SignalId};
+use sizetrail::model::{
+    Advice, AdviceImpact, MeasurementBasis, MeasurementValue, ObservationRelation, SignalId,
+};
 use sizetrail::policy::{PolicyCtx, SIDE_EFFECT_REGISTRY};
 
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -402,4 +404,74 @@ fn an_unavailable_prefix_root_keeps_home_measurements_and_declares_the_boundary_
         gap.reason == sizetrail::adapters::InventoryGapReason::AccessDenied
             && gap.stage == Some(sizetrail::adapters::InventoryStage::RootInitialization)
     }));
+}
+
+#[test]
+fn homebrew_advice_keeps_installed_software_and_logs_reveal_only() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    make_installation(fixture.path(), "opt/homebrew", "Cellar");
+    write(
+        &fixture
+            .path()
+            .join("Library/Caches/Homebrew/downloads/source.tar.gz"),
+        "download",
+    );
+    write(
+        &fixture.path().join("Library/Logs/Homebrew/example/01.log"),
+        "failed build",
+    );
+    write(
+        &fixture
+            .path()
+            .join("opt/homebrew/Cellar/example/1.0/bin/example"),
+        "installed",
+    );
+    let home_root = Root::open(fixture.path()).expect("HOME Root must open");
+    let layout = homebrew::discover_layout(Some(fixture.path())).expect("layout must exist");
+    let prefix_root = homebrew::open_prefix_root(&layout).expect("prefix Root must open");
+    let adapter = homebrew::HomebrewAdapter::new(
+        &home_root,
+        &prefix_root,
+        &layout,
+        &[],
+        Ok(false),
+        Ok(false),
+    );
+    let inventory = adapter.inventory(
+        &mut PolicyCtx::for_scan(),
+        &AdapterState::Ready {
+            version: "6.0.19".to_owned(),
+        },
+    );
+    let findings = adapter
+        .classify(&inventory)
+        .expect("Homebrew inventory must classify");
+
+    for rule_id in ["homebrew.cellar", "homebrew.logs"] {
+        let finding = findings
+            .iter()
+            .find(|finding| finding.rule_id == rule_id)
+            .unwrap_or_else(|| panic!("{rule_id} finding must exist"));
+        assert!(
+            finding
+                .advice
+                .iter()
+                .all(|advice| matches!(advice, Advice::Reveal(_))),
+            "{rule_id} must never suggest a deletion command"
+        );
+    }
+
+    let downloads = findings
+        .iter()
+        .find(|finding| finding.rule_id == "homebrew.cache_downloads")
+        .expect("downloads finding must exist");
+    assert!(downloads.advice.iter().any(|advice| matches!(
+        advice,
+        Advice::Command(command)
+            if matches!(command.impact, AdviceImpact::Destructive)
+                && !command.reliable_preview_available
+                && command.display_command == "HOMEBREW_NO_AUTOREMOVE=1 brew cleanup"
+                && command.explanation.contains("autoremove")
+                && command.explanation.contains("downloads")
+    )));
 }
