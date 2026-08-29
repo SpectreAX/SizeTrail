@@ -121,7 +121,7 @@ fn finish_homebrew_report(
                     .normalized_prefix_path(prefix_root, path)
                     .or_else(|| crate::model::normalized_report_path(home_root.path(), path).ok())
             }),
-            status: RegionStatus::Unmeasurable,
+            status: coverage_gap_status(gap.reason),
             reason: coverage_reason(gap.reason),
             stage: gap.stage.map(|stage| stage.as_str().to_owned()),
             errno: gap.errno,
@@ -219,7 +219,7 @@ pub fn xcode_report_with_sink(
                 .path
                 .as_deref()
                 .and_then(|path| crate::model::normalized_report_path(root.path(), path).ok()),
-            status: RegionStatus::Unmeasurable,
+            status: coverage_gap_status(gap.reason),
             reason: coverage_reason(gap.reason),
             stage: gap.stage.map(|stage| stage.as_str().to_owned()),
             errno: gap.errno,
@@ -297,6 +297,28 @@ pub fn unmeasurable_adapter_report(id: &str) -> AdapterReport {
     }
 }
 
+const fn coverage_gap_status(reason: InventoryGapReason) -> RegionStatus {
+    match reason {
+        InventoryGapReason::CaskArtifactOutsidePrefix
+        | InventoryGapReason::UnsupportedPathOverride => RegionStatus::DeclaredScopeBoundary,
+        InventoryGapReason::AbsentOrChanged
+        | InventoryGapReason::AccessDenied
+        | InventoryGapReason::PolicyDeniedUnknown
+        | InventoryGapReason::UnknownVersion
+        | InventoryGapReason::NotReady
+        | InventoryGapReason::Disabled
+        | InventoryGapReason::ProbeFailed
+        | InventoryGapReason::TraversalFailed
+        | InventoryGapReason::InvalidToolOutput
+        | InventoryGapReason::CoreSimulatorVersionMismatch
+        | InventoryGapReason::SimulatorIdentityUnavailable
+        | InventoryGapReason::RuntimeSizeUnavailable
+        | InventoryGapReason::TimedOut
+        | InventoryGapReason::RuleSetInvalid
+        | InventoryGapReason::VolumeSnapshotStateUnavailable => RegionStatus::Unmeasurable,
+    }
+}
+
 const fn coverage_reason(reason: InventoryGapReason) -> CoverageGapReason {
     match reason {
         InventoryGapReason::AbsentOrChanged => CoverageGapReason::AbsentOrChanged,
@@ -323,6 +345,7 @@ const fn coverage_reason(reason: InventoryGapReason) -> CoverageGapReason {
         InventoryGapReason::CaskArtifactOutsidePrefix => {
             CoverageGapReason::CaskArtifactOutsidePrefix
         }
+        InventoryGapReason::UnsupportedPathOverride => CoverageGapReason::UnsupportedPathOverride,
     }
 }
 
@@ -344,6 +367,7 @@ const fn gap_reason_id(reason: InventoryGapReason) -> &'static str {
         InventoryGapReason::RuleSetInvalid => "rule_set_invalid",
         InventoryGapReason::VolumeSnapshotStateUnavailable => "volume_snapshot_state_unavailable",
         InventoryGapReason::CaskArtifactOutsidePrefix => "cask_artifact_outside_prefix",
+        InventoryGapReason::UnsupportedPathOverride => "unsupported_path_override",
     }
 }
 

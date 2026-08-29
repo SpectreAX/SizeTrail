@@ -377,12 +377,9 @@ fn caskroom_symlink_targets_outside_prefix_become_gaps_without_becoming_measurem
             .iter()
             .any(|gap| { gap.reason == sizetrail::adapters::InventoryGapReason::UnknownVersion })
     );
-    assert!(
-        inventory
-            .gaps
-            .iter()
-            .any(|gap| { gap.reason == sizetrail::adapters::InventoryGapReason::AbsentOrChanged })
-    );
+    assert!(inventory.gaps.iter().any(|gap| {
+        gap.reason == sizetrail::adapters::InventoryGapReason::UnsupportedPathOverride
+    }));
     let caskroom = inventory
         .items
         .iter()

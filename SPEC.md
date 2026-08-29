@@ -754,10 +754,10 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 
 | 码 | 含义 |
 |---|---|
-| `0` | 所有已启用且适用的 region 完成。`not_present` 与 `excluded_by_user` **均为 0** |
+| `0` | 所有已启用且适用的 region 完成。`not_present`、`excluded_by_user` **以及仅含 `declared_scope_boundary` gap 的 `complete` region** 均为 0（Q54） |
 | `1` | 无法初始化或无法形成合法文档的 fatal error。**窗口仅限初始化前失败**，实践中应罕见 |
 | `2` | CLI usage error（clap）。**不产生 scan 文档**。无效 `--exclude` 属此类 |
-| `3` | 产生了完整文档，但至少一个适用 region 因权限、未知版本、解析失败、超时等未测量 |
+| `3` | 产生了完整文档，但至少一个适用 region 因权限、未知版本、解析失败、超时等**环境性**原因未测量。已声明的永久范围边界不是此类 |
 
 每个 region 使用 typed status；stderr 仅作人类诊断。
 
@@ -821,7 +821,7 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | Homebrew `.git` 版本元数据读取 | 内容打开前经 prefix `Root::measure_object`；无命令 | `getattrlist` 精确符号集 | Homebrew TreeSnapshot + scan sandbox | 0 次调用 | loose ref、detached HEAD、packed refs、出界 `.git` symlink 与缺失 describe-cache fixtures；dataless/出界/未知版本 typed degraded 但不阻断计量 |
 | Homebrew keg receipt 解析 | 先经 prefix `Root::measure_object`，再 safe read | `getattrlist` 精确符号集 | Homebrew TreeSnapshot + scan sandbox | — | fixture 只读取 `installed_on_request`；字段缺失保持 unknown，receipt 的名字与 artifact target 均不作为归因证据 |
 | Homebrew store 符号链接枚举与 link text | safe `read_link`；不 `stat`/canonicalize target | `getattrlist` 精确符号集 | Homebrew dangling-target fixture + TreeSnapshot + scan sandbox | — | Cellar/Cask cache 链接只计自身；Caskroom staged link 只作 prefix 外 gap 证据；`/Applications` 永不进入 region |
-| `brew.env` 改向 `HOMEBREW_CACHE` / `HOMEBREW_LOGS` | — | — | — | — | **未覆盖**：v0.2 不读取或解析 `brew.env`；默认 cache 缺失时发 `absent_or_changed` typed gap，不声称默认路径完整 |
+| `brew.env` 改向 `HOMEBREW_CACHE` / `HOMEBREW_LOGS` | — | — | — | — | **未覆盖**：v0.2 不读取或解析 `brew.env`；仅当默认 cache **根**不存在时发一条 `unsupported_path_override`（`declared_scope_boundary`）。子目录缺席是常态，不发 gap |
 | 外部命令 / 子进程 | `Command` 仅 policy | — | sandbox 逐子命令覆盖直接进程写尝试 | 是 | registry 精确锁定六条 Xcode/CoreSimulator probe；adapter 只能提交 `ProbeId`，不能提交程序、参数或用户输入 |
 | Homebrew 外部命令 / 子进程 | `Command` 仅 policy；Homebrew 无 probe id | — | Homebrew read-only harness + scan sandbox | 精确为 0 | 完整 Homebrew inventory 后逐 registry id 断言计数仍为 0；`SIDE_EFFECT_REGISTRY` 精确集合测试锁住未新增条目 |
 | `/usr/bin/xcode-select -p` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 生产 probe 测试实际执行；只判 selection，标准 CLT → `not_present` |
@@ -946,10 +946,10 @@ prefix 位于 HOME 之外，因此需要**为 prefix 单独 `Root::open`**。若
 
 | 情形 | gap reason |
 |---|---|
-| cask 的 artifact 被移到 prefix 之外（Caskroom 只剩符号链接） | `CaskArtifactOutsidePrefix` |
+| cask 的 artifact 被移到 prefix 之外（Caskroom 只剩符号链接） | `CaskArtifactOutsidePrefix`，coverage status 为 `declared_scope_boundary`（Q54）；**不**使 Homebrew region 变为 `unmeasurable`，**不**产生退出码 3 |
 | `.git/describe-cache` 不可读或 shallow | adapter `Degraded { UnknownVersion }` |
 | prefix Root 打不开（含跨卷） | `AccessDenied` 或 `TraversalFailed` |
-| `HOMEBREW_CACHE` 可能被 `brew.env` 改向 | `AbsentOrChanged`（缓存路径不存在时） |
+| `HOMEBREW_CACHE` 可能被 `brew.env` 改向 | 仅当 `~/Library/Caches/Homebrew` **根目录**不存在时发一条 `UnsupportedPathOverride`（`declared_scope_boundary`）。单个 cache 子目录缺席不发 gap |
 
 **`/Applications` 不进入 Homebrew region 的计量**（Q52）：首要证据是 Caskroom 内 staged source symlink 的 link text；只做词法归一化与 prefix 边界比较，**不得** `stat`、`canonicalize`、遍历或计量目标。cask receipt 的 `uninstall_artifacts` 仅可作为补充证据，因为普通 `app` receipt 通常没有绝对 target；不得把 receipt 或 symlink 指向的字节求和。
 
@@ -967,7 +967,7 @@ prefix 位于 HOME 之外，因此需要**为 prefix 单独 `Root::open`**。若
 2. 版本读取：`describe-cache` 命中；`HEAD` 为 ref 与为裸 sha 两种；`packed-refs` 回退；缺失 → `UnknownVersion`。
 3. **零调用断言**：Homebrew adapter 完整跑一遍后，`InvocationTracker` 计数为 0。
 4. 符号链接 fixture：Cellar 内版本化库链接、`Cask/` 指向 `downloads/` 的链接；断言不重复计数且不 unmeasurable。
-5. `CaskArtifactOutsidePrefix`：Caskroom 只剩符号链接的 cask 必须产生该 gap。
+5. `CaskArtifactOutsidePrefix`：Caskroom 只剩符号链接的 cask 必须产生该 gap；coverage status 为 `declared_scope_boundary`，scan 退出 0（Q54）。
 6. `installed_on_request` 缺失 → unknown，不得为 `false`。
 7. 每条规则一个 `tests/fixtures/rules/<fixture_id>.json`。
 8. 零写 harness：Homebrew fixture 前后快照逐字段相等。

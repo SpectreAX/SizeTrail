@@ -508,6 +508,8 @@ resource fork 与压缩行为是**受支持系统上的 fixture 事实，不是�
 
 被否：B（只用 0/1，partial 返回 0）、C（任何 unmeasurable 返回 1 —— 会把「机器没装 Docker」误判为错误）。
 
+**Q54 补充：** 退出码 `3` 只对应环境性失败。已声明的永久范围边界使用 `declared_scope_boundary`，不把 region 标为 `unmeasurable`，也不产生退出码 3。
+
 ---
 
 ## Q22 — CLI 表面
@@ -1145,6 +1147,33 @@ cask 的 `app` artifact 被**移动**到 `/Applications`，Caskroom 只留一个
 被否：把 `/Applications` 目标计入 Homebrew（跨 ownership 归因，且与手工安装无法区分）；跟随 Caskroom 的符号链接（Q51 已否，会重复计数并越过 root）；只报 Caskroom 尺寸不声明 gap（沉默的少算，等于用一个看起来完整的数字掩盖已知缺口）。
 
 影响：`InventoryGapReason` 新增 `CaskArtifactOutsidePrefix`，并同步 `src/scan.rs` 的 `coverage_reason` / `gap_reason_id`。
+
+---
+
+## Q54 — 已声明的范围边界不是环境性失败
+
+Q21 把退出码 3 留给「适用 region 因权限、未知版本、解析失败、超时等未测量」。Q52 又要求：cask 的 artifact 落在 prefix 之外时必须发 typed gap，且 `/Applications` 永不进入 Homebrew region。
+
+P4.1 把所有 inventory gap 的 `status` 都写成 `unmeasurable`。region 上任一 `unmeasurable` gap 就把整个 Homebrew region 标成 `unmeasurable`，scan 因此退出 3。本机 2026-08-29 实测：`scan --json --no-xcode` 退出 3，八个 app cask 各一条 `cask_artifact_outside_prefix`（Inkscape、Kumone、Obsidian、OrbStack、PortKiller、Typeless、Zed、Ghostty）。Caskroom 本身测到了，`/Applications` 也没被计入 —— 归因符合 Q52。错的是把「我们决定永不计量」和「这次没测成」焊成同一个状态。
+
+hosted CI 全绿，是因为 runner 上没有这类 cask。那不是覆盖，是样本缺口。
+
+**决策：coverage gap 获得与原因相称的 status。** `CaskArtifactOutsidePrefix` 映射为 `RegionStatus::DeclaredScopeBoundary`。该 status **不**使 owning region 变为 `unmeasurable`，也 **不**产生退出码 3。region 在其承诺范围内测完即为 `complete`；gap 仍留在文档里，所以未知没有被隐藏。
+
+环境性失败（权限、未知版本、解析失败、超时、探测关闭、遍历失败）继续映射 `unmeasurable` → 退出 3。两类不得共用一个 status。
+
+**缺席的可选 cache 子目录不是环境性失败。** 本机在修好 cask 映射后仍退出 3：`api-source` 与八个 build-tool cache 从未被创建，每条都发了 `absent_or_changed`。那些目录只在源码构建后出现，缺席是常态。把「从未生成」写成「这次没测成」，与把 `/Applications` 写成 unmeasurable 是同一错误。
+
+因此：
+
+- 某个 `homebrew.cache_*` 路径不存在 → 不发 gap，与 `homebrew.logs` 缺席的处理一致。
+- `~/Library/Caches/Homebrew` 根目录本身不存在 → 发**一条** `unsupported_path_override`，status 为 `declared_scope_boundary`。这是 Q50「不读 `brew.env`」的范围声明，不是测量故障。
+
+`doctor` 的就绪判定跟随 region status：`complete` 的 Homebrew 即使带有 `declared_scope_boundary` gap 也算就绪。
+
+被否：把 region 标成第三种终态（消费者必须同时理解 region 与 gap 才能判断「测完了没有」，而 gap 已经表达了边界）；把这类 gap 从文档里拿掉（Q52 已否决沉默少算）；继续用退出码 3（把产品范围写成故障，且让装了 app cask 的机器永久不完整）。
+
+影响：`src/model.rs` 的 `RegionStatus`；`src/scan.rs` 的 gap status 映射；`SPEC.md` §11.3、§12.2.5。
 
 ---
 

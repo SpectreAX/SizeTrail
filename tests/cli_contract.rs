@@ -2,6 +2,7 @@
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use serde_json::Value;
+use std::os::unix::fs::symlink;
 
 fn write_fixture(path: &std::path::Path, contents: &str) {
     if let Some(parent) = path.parent() {
@@ -35,6 +36,25 @@ fn homebrew_fixture() -> tempfile::TempDir {
         "6.0.19\n",
     );
     fixture
+}
+
+fn write_default_homebrew_cache_dirs(root: &std::path::Path) {
+    for relative in [
+        "Library/Caches/Homebrew/downloads",
+        "Library/Caches/Homebrew/api",
+        "Library/Caches/Homebrew/api-source",
+        "Library/Caches/Homebrew/bootsnap",
+        "Library/Caches/Homebrew/cargo_cache",
+        "Library/Caches/Homebrew/go_cache",
+        "Library/Caches/Homebrew/go_mod_cache",
+        "Library/Caches/Homebrew/glide_home",
+        "Library/Caches/Homebrew/java_cache",
+        "Library/Caches/Homebrew/npm_cache",
+        "Library/Caches/Homebrew/pip_cache",
+        "Library/Caches/Homebrew/gclient_cache",
+    ] {
+        std::fs::create_dir_all(root.join(relative)).expect("cache fixture must be created");
+    }
 }
 
 #[test]
@@ -87,6 +107,100 @@ fn exit_codes_distinguish_complete_fatal_usage_and_informational_scans() {
         .expect("fatal scan must run");
     assert_eq!(fatal.status.code(), Some(1));
     assert!(fatal.stdout.is_empty());
+}
+
+/// Q54: a staged app cask is a declared scope boundary, not an environmental failure.
+/// The host that motivated this decision exits 3 solely because eight such casks exist.
+#[test]
+fn a_cask_moved_outside_the_prefix_does_not_make_the_scan_incomplete() {
+    let fixture = homebrew_fixture();
+    write_default_homebrew_cache_dirs(fixture.path());
+    let cask = fixture.path().join("opt/homebrew/Caskroom/zed/1.15.0");
+    std::fs::create_dir_all(&cask).expect("cask fixture must be created");
+    symlink("/Applications/Zed.app", cask.join("Zed.app"))
+        .expect("staged app link must be created");
+
+    let output = cargo_bin_cmd!("sizetrail")
+        .args(["scan", "--json", "--no-xcode", "--root"])
+        .arg(fixture.path())
+        .output()
+        .expect("Homebrew cask scan must run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: Value =
+        serde_json::from_slice(&output.stdout).expect("scan must emit one JSON document");
+    assert!(
+        document["payload"]["regions"]
+            .as_array()
+            .expect("regions must be an array")
+            .iter()
+            .any(|region| region["id"] == "homebrew" && region["status"] == "complete"),
+        "homebrew region: {}",
+        document["payload"]["regions"]
+    );
+    assert!(
+        document["payload"]["coverage_gaps"]
+            .as_array()
+            .expect("coverage gaps must be an array")
+            .iter()
+            .any(|gap| {
+                gap["reason"] == "cask_artifact_outside_prefix"
+                    && gap["status"] == "declared_scope_boundary"
+            }),
+        "coverage gaps: {}",
+        document["payload"]["coverage_gaps"]
+    );
+    assert!(
+        document["payload"]["coverage_gaps"]
+            .as_array()
+            .expect("coverage gaps must be an array")
+            .iter()
+            .all(|gap| gap["status"] != "unmeasurable"),
+        "an environmental unmeasurable would hide the Q54 mapping"
+    );
+}
+
+#[test]
+fn a_missing_homebrew_cache_root_is_a_declared_boundary_not_an_incomplete_scan() {
+    let fixture = homebrew_fixture();
+    let output = cargo_bin_cmd!("sizetrail")
+        .args(["scan", "--json", "--no-xcode", "--root"])
+        .arg(fixture.path())
+        .output()
+        .expect("Homebrew scan without cache root must run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: Value =
+        serde_json::from_slice(&output.stdout).expect("scan must emit one JSON document");
+    assert!(
+        document["payload"]["regions"]
+            .as_array()
+            .expect("regions must be an array")
+            .iter()
+            .any(|region| region["id"] == "homebrew" && region["status"] == "complete")
+    );
+    assert!(
+        document["payload"]["coverage_gaps"]
+            .as_array()
+            .expect("coverage gaps must be an array")
+            .iter()
+            .any(|gap| {
+                gap["reason"] == "unsupported_path_override"
+                    && gap["status"] == "declared_scope_boundary"
+            })
+    );
 }
 
 #[test]
@@ -184,8 +298,9 @@ fn root_fixture_discovers_homebrew_without_running_brew() {
         .output()
         .expect("Homebrew fixture scan must run");
 
-    assert!(
-        matches!(output.status.code(), Some(0 | 3)),
+    assert_eq!(
+        output.status.code(),
+        Some(0),
         "stdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
@@ -255,8 +370,9 @@ fn exact_homebrew_prefix_exclusion_is_applied_before_inventory() {
         .output()
         .expect("Homebrew exclusion scan must run");
 
-    assert!(
-        matches!(output.status.code(), Some(0 | 3)),
+    assert_eq!(
+        output.status.code(),
+        Some(0),
         "stdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)

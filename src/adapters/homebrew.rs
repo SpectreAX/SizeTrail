@@ -232,6 +232,22 @@ impl HomebrewAdapter<'_> {
             };
         };
         let mut inventory = Inventory::default();
+        let cache_root = self.home_root.path().join("Library/Caches/Homebrew");
+        match self.home_root.path_exists_without_descending(&cache_root) {
+            Ok(false) => inventory.gaps.push(InventoryGap {
+                region: "homebrew.cache",
+                path: Some(cache_root),
+                reason: InventoryGapReason::UnsupportedPathOverride,
+                stage: Some(InventoryStage::RuleEvaluation),
+                errno: None,
+            }),
+            Ok(true) => {}
+            Err(error) => {
+                inventory
+                    .gaps
+                    .push(io_gap(&cache_root, InventoryStage::RuleEvaluation, &error))
+            }
+        }
         if let Some(reason) = self.prefix_gap {
             inventory.gaps.push(InventoryGap {
                 region: "homebrew.prefix",
@@ -311,20 +327,6 @@ impl HomebrewAdapter<'_> {
                         continue;
                     }
                 };
-                if stores.is_empty()
-                    && rule.id.starts_with("homebrew.cache_")
-                    && pattern.starts_with("~/")
-                {
-                    inventory.gaps.push(InventoryGap {
-                        region: "homebrew.cache",
-                        path: pattern
-                            .strip_prefix("~/")
-                            .map(|relative| self.home_root.path().join(relative)),
-                        reason: InventoryGapReason::AbsentOrChanged,
-                        stage: Some(InventoryStage::RuleEvaluation),
-                        errno: None,
-                    });
-                }
                 for (root, path, home_side) in stores {
                     self.measure_rule_store(
                         rule.id.as_str(),

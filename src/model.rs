@@ -136,6 +136,9 @@ pub enum RegionStatus {
     Complete,
     NotPresent,
     ExcludedByUser,
+    /// A gap that documents a permanent product-scope boundary. It must not mark the
+    /// owning region unmeasurable or produce exit code 3 (Q54).
+    DeclaredScopeBoundary,
     Unmeasurable,
 }
 
@@ -386,6 +389,7 @@ pub enum CoverageGapReason {
     RuleSetInvalid,
     VolumeSnapshotStateUnavailable,
     CaskArtifactOutsidePrefix,
+    UnsupportedPathOverride,
     ExcludedByUser,
 }
 

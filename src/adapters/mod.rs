@@ -114,6 +114,7 @@ pub enum InventoryGapReason {
     RuleSetInvalid,
     VolumeSnapshotStateUnavailable,
     CaskArtifactOutsidePrefix,
+    UnsupportedPathOverride,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
