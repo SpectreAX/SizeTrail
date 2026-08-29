@@ -131,23 +131,16 @@ fn real_xcode_storage_produces_structurally_valid_findings() {
             .count()
     })
     .unwrap_or(0);
+    // No gap escape hatch here. Accepting "measured or declared" let a real defect through: a
+    // sibling `device_set.plist` aborted the whole wildcard expansion, and the version-mismatch
+    // gap was accepted as if it covered the 133 device sets it said nothing about (Q45).
     if devices_on_disk > 0 {
-        let reported = findings
-            .iter()
-            .any(|finding| finding["rule_id"] == "xcode.simulator_device");
-        let declared = document["payload"]["coverage_gaps"]
-            .as_array()
-            .expect("coverage gaps must be an array")
-            .iter()
-            .any(|gap| {
-                gap["region"]
-                    .as_str()
-                    .is_some_and(|region| region.starts_with("xcode.simulator"))
-            });
         assert!(
-            reported || declared,
-            "{devices_on_disk} simulator device sets exist on disk but were neither measured nor \
-             covered by a typed gap, so their bytes are silently missing; {}",
+            findings
+                .iter()
+                .any(|finding| finding["rule_id"] == "xcode.simulator_device"),
+            "{devices_on_disk} simulator device sets exist on disk but none were measured; their \
+             bytes need no version-gated probe, so zero here is a traversal or gating defect; {}",
             diagnostics(&document)
         );
     }

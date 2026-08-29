@@ -651,7 +651,7 @@ GA runner 记录 fixture benchmark，但**只发布「该 runner image + fixture
 11. **规则表完整性测试** — 遍历全部内置规则：`evidence` 非空、正交字段合法、`adapter` 是已编译 id、`paths` 非空、存在对应 fixture、无 `override_reason` 缺失。
 12. **advice 类型测试** — 断言 `destructive` advice 在类型上无法进入 probe runner；断言 advice 命令从不含 `--force` / `--yes` / shell 管道；断言命令不含任何用户输入。
 13. **finding ID 稳定性测试** — 断言 ID 与发现顺序无关；断言 HOME 变化下 digest 不变；断言算法版本变更时 `--from` 校验失败。
-14. **真实环境测试（Q44，non-blocking lane 专用）** — 在 runner 真实 `$HOME` 上执行真实 scan，拆成两条互不替代的断言。**A 文件系统侧归因（按类别，不按总数）**：磁盘上存在 device 目录时，要么该类别被报告，要么存在覆盖它的 typed gap，两者皆无则失败。「至少一条 finding」是 fail-open —— 它曾在 133 个 device set 缺失时通过（Q45）。**B 版本门控降级**：版本不匹配时必须干净降级为 `unknown_version`，既不使 scan 失败，也不执行 simctl wrapper。两条禁止：**不得断言字节值**（真实体积非确定，只断言 `floor ≤ ceiling`、区间不收敛、每个数字带 basis、无跨 basis 求和、typed gap 合法，且不进第 6 项的逐字节 payload fixture）；**不得用作零写门禁**（Xcode/CoreSimulator 后台服务会独立修改这些目录，快照断言按构造 flaky，而 flaky 门禁的结局是被关掉且声明留下）。
+14. **真实环境测试（Q44，non-blocking lane 专用）** — 在 runner 真实 `$HOME` 上执行真实 scan，拆成两条互不替代的断言。**A 文件系统侧归因（按类别，不留 gap 逃逸口）**：磁盘上存在 device 目录时该类别必须被计量。「至少一条 finding」曾在 133 个 device set 缺失时通过；改为「被报告或有 typed gap」后，又把 `core_simulator_version_mismatch` 当成覆盖了那 133 个目录，放过了通配展开被兄弟文件中断的真实缺陷（Q45）。这些字节不需要版本门控 probe，零即缺陷。**B 版本门控降级**：版本不匹配时必须干净降级为 `unknown_version`，既不使 scan 失败，也不执行 simctl wrapper。两条禁止：**不得断言字节值**（真实体积非确定，只断言 `floor ≤ ceiling`、区间不收敛、每个数字带 basis、无跨 basis 求和、typed gap 合法，且不进第 6 项的逐字节 payload fixture）；**不得用作零写门禁**（Xcode/CoreSimulator 后台服务会独立修改这些目录，快照断言按构造 flaky，而 flaky 门禁的结局是被关掉且声明留下）。
 
 ### 10.3 CI 门禁
 

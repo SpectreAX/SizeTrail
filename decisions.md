@@ -978,7 +978,11 @@ Q44 的 lane 首轮就给出了证据（2026-08-29，hosted runner）：
 
 红线 5 不变：新 gap 不分解任何区间，不与观测信号相加，区间仍不得收敛。
 
-**Q44 断言 A 随之改为按类别。** 「至少一条 finding」在 133 个 device set 缺失时照样通过，与 §9.0 想防的是同一种 fail-open 形状：门禁必须断言被测能力真的执行了。改为：磁盘上存在 device 目录时，要么该类别被报告，要么存在覆盖它的 typed gap；两者皆无则失败。
+**Q44 断言 A 随之改为按类别，且不留 gap 逃逸口。** 「至少一条 finding」在 133 个 device set 缺失时照样通过，与 §9.0 想防的是同一种 fail-open 形状。第一版改法保留了「被报告 **或** 有覆盖它的 typed gap」，而这个逃逸口立刻又放过了一个真实缺陷：
+
+> `expand_home_pattern` 在 `*` 组件匹配到非目录条目时整个展开 `return Err`。真实的 `CoreSimulator/Devices/` 永远有一个 `device_set.plist` 与 UUID 目录并列，因此一个兄弟文件让 133 个 device set 全部丢失。checked-in fixture 当时只有 UUID 目录、没有那个 plist —— **fixture 只装了作者想到的东西**，这正是 Q44 的立论。断言当时把 `core_simulator_version_mismatch` gap 当成了「覆盖了 device set」，而那条 gap 对这 133 个目录什么也没说。
+
+因此：**磁盘上存在 device 目录时，该类别必须被计量，没有 gap 替代项。** 这些字节不需要任何版本门控 probe，零就是遍历或门控缺陷。`device_set.plist` 已写入 fixture，把现实固定下来。通配组件遇非目录条目改为跳过（它们不是 store）；字面组件仍报错，因为那是规则显式命名的路径，类型不符属于规则缺陷。
 
 被否：保持现状（在常见 Xcode 上丢弃可计量字节）；把 runner 的 CoreSimulator 版本补进 pin（把正确性绑定到 image 轮换，Q44 已否决同一形状）；由目录名伪造设备身份；把 runtime 也静态枚举（身份需 simctl 且位于 root 之外）。
 

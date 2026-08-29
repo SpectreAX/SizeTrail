@@ -553,10 +553,20 @@ fn expand_home_pattern(
                 if excluded(&child.path, excludes) {
                     continue;
                 }
-                let matches = component == "*"
-                    || child.path.file_name().is_some_and(|name| name == component);
+                let wildcard = component == "*";
+                let matches =
+                    wildcard || child.path.file_name().is_some_and(|name| name == component);
                 if matches {
                     if child.kind != RootEntryKind::Directory {
+                        // A wildcard enumerates candidate stores, and a real store directory sits
+                        // next to unrelated files -- `CoreSimulator/Devices` always holds
+                        // `device_set.plist` beside the device directories. Aborting the whole
+                        // expansion there loses every sibling store. A literal component is
+                        // different: the rule named that path, so a kind mismatch is a rule
+                        // defect worth surfacing.
+                        if wildcard {
+                            continue;
+                        }
                         return Err((
                             child.path,
                             io::Error::other("rule path matched an unsupported entry kind"),
