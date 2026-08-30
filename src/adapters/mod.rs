@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::model::{Advice, Finding, Measurement, SignalObservation};
+use crate::model::{Advice, Finding, FindingSubject, Measurement, SignalObservation};
 use crate::policy::PolicyCtx;
 
 pub mod homebrew;
@@ -57,7 +57,7 @@ pub struct Inventory {
 #[derive(Clone, Debug)]
 pub struct InventoryItem {
     pub rule_id: String,
-    pub normalized_path: String,
+    pub subject: FindingSubject,
     pub path: Option<PathBuf>,
     pub measurements: Vec<Measurement>,
     pub observations: Vec<SignalObservation>,

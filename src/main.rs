@@ -206,7 +206,9 @@ fn run() -> Result<u8, String> {
                     xcode_report_with_sink(scan_root, &mut ctx, &excludes, |finding| {
                         println!(
                             "{}\t{}\t{}",
-                            finding.id, finding.normalized_path, finding.summary
+                            finding.id,
+                            finding.subject.display_value(),
+                            finding.summary
                         );
                     })
                 }
@@ -217,7 +219,9 @@ fn run() -> Result<u8, String> {
                 for finding in &homebrew.findings {
                     println!(
                         "{}\t{}\t{}",
-                        finding.id, finding.normalized_path, finding.summary
+                        finding.id,
+                        finding.subject.display_value(),
+                        finding.summary
                     );
                 }
             }
@@ -540,9 +544,9 @@ fn render_explanation(
     if arguments.get_flag("path") {
         println!(
             "{}",
-            finding["normalized_path"]
+            finding["subject"]["normalized_path"]
                 .as_str()
-                .ok_or_else(|| "finding has no normalized path".to_owned())?
+                .ok_or_else(|| "finding has no filesystem path".to_owned())?
         );
     } else if arguments.get_flag("json") {
         println!(

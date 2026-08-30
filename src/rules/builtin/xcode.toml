@@ -3,9 +3,9 @@ id = "xcode.derived_data_build"
 adapter = "xcode"
 title = "DerivedData generated build state"
 description = "Build products and indexes generated for an Xcode project."
-paths = [
-  "~/Library/Developer/Xcode/DerivedData/*/Build",
-  "~/Library/Developer/Xcode/DerivedData/*/Index.noindex",
+subjects = [
+  { kind = "filesystem_path", pattern = "~/Library/Developer/Xcode/DerivedData/*/Build" },
+  { kind = "filesystem_path", pattern = "~/Library/Developer/Xcode/DerivedData/*/Index.noindex" },
 ]
 os = ">=13.0"
 mechanism = "generated"
@@ -20,7 +20,7 @@ id = "xcode.archives"
 adapter = "xcode"
 title = "Xcode archives"
 description = "Signed build archives that may be the only retained copy of a shipped build."
-paths = ["~/Library/Developer/Xcode/Archives/*"]
+subjects = [{ kind = "filesystem_path", pattern = "~/Library/Developer/Xcode/Archives/*" }]
 os = ">=13.0"
 mechanism = "user_owned"
 recoverability = "unrecoverable"
@@ -34,7 +34,7 @@ id = "xcode.device_support"
 adapter = "xcode"
 title = "iOS DeviceSupport"
 description = "Developer support files associated with device OS versions."
-paths = ["~/Library/Developer/Xcode/iOS DeviceSupport/*"]
+subjects = [{ kind = "filesystem_path", pattern = "~/Library/Developer/Xcode/iOS DeviceSupport/*" }]
 os = ">=13.0"
 mechanism = "user_adjacent"
 recoverability = "requires_external_device"
@@ -48,7 +48,7 @@ id = "xcode.simulator_device"
 adapter = "xcode"
 title = "Simulator device data"
 description = "Per-device simulator applications, settings, keychains, and test state."
-paths = ["~/Library/Developer/CoreSimulator/Devices/*"]
+subjects = [{ kind = "filesystem_path", pattern = "~/Library/Developer/CoreSimulator/Devices/*" }]
 os = ">=13.0"
 mechanism = "user_adjacent"
 recoverability = "unrecoverable"
@@ -62,7 +62,7 @@ id = "xcode.simulator_runtime"
 adapter = "xcode"
 title = "Simulator runtimes"
 description = "System-managed runtime disk images registered with CoreSimulator."
-paths = ["/Library/Developer/CoreSimulator/Volumes/*"]
+subjects = [{ kind = "filesystem_path", pattern = "/Library/Developer/CoreSimulator/Volumes/*" }]
 os = ">=13.0"
 mechanism = "vendor_managed"
 recoverability = "redownload_bandwidth"

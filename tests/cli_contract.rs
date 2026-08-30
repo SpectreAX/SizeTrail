@@ -321,7 +321,7 @@ fn root_fixture_discovers_homebrew_without_running_brew() {
                     && finding["id"]
                         .as_str()
                         .is_some_and(|id| id.starts_with("f1:homebrew:"))
-                    && finding["normalized_path"] == "/opt/homebrew/Cellar/example/1.0"
+                    && finding["subject"]["normalized_path"] == "/opt/homebrew/Cellar/example/1.0"
             })
     );
 }
@@ -384,7 +384,9 @@ fn exact_homebrew_prefix_exclusion_is_applied_before_inventory() {
             .as_array()
             .expect("findings must be an array")
             .iter()
-            .all(|finding| finding["normalized_path"] != "/opt/homebrew/Cellar/example/1.0")
+            .all(|finding| {
+                finding["subject"]["normalized_path"] != "/opt/homebrew/Cellar/example/1.0"
+            })
     );
     assert!(
         document["payload"]["coverage_gaps"]

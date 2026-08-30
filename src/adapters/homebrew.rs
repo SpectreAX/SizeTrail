@@ -8,8 +8,8 @@ use crate::adapters::{
 };
 use crate::fsx::{Root, RootError};
 use crate::model::{
-    Advice, AdviceImpact, CommandAdvice, Finding, RevealAdvice, finding_id, normalize_findings,
-    normalized_report_path,
+    Advice, AdviceImpact, CommandAdvice, Finding, FindingSubject, RevealAdvice, finding_id,
+    normalize_findings, normalized_report_path,
 };
 use crate::policy::PolicyCtx;
 use crate::rules::builtin_rules;
@@ -179,14 +179,18 @@ impl ToolchainAdapter for HomebrewAdapter<'_> {
             let rule = rules
                 .get(&item.rule_id)
                 .ok_or(InventoryGapReason::RuleSetInvalid)?;
+            let subject_key = item
+                .subject
+                .canonical_key()
+                .map_err(|_| InventoryGapReason::RuleSetInvalid)?;
             let mut finding = Finding {
-                id: finding_id("homebrew", &item.rule_id, &item.normalized_path)
+                id: finding_id("homebrew", &item.rule_id, &subject_key)
                     .map_err(|_| InventoryGapReason::RuleSetInvalid)?,
                 adapter_id: "homebrew".to_owned(),
                 rule_id: item.rule_id.clone(),
                 title: rule.title.clone(),
                 summary: String::new(),
-                normalized_path: item.normalized_path.clone(),
+                subject: item.subject.clone(),
                 mechanism: rule.mechanism.as_str().to_owned(),
                 recoverability: rule.recoverability.as_str().to_owned(),
                 sensitivity: rule.sensitivity.as_str().to_owned(),
@@ -212,10 +216,15 @@ impl ToolchainAdapter for HomebrewAdapter<'_> {
                 reliable_preview_available: false,
             })]
         } else {
-            vec![Advice::Reveal(RevealAdvice {
-                normalized_path: finding.normalized_path.clone(),
-                recovery_semantics: finding.evidence.clone(),
-            })]
+            finding
+                .subject
+                .filesystem_path()
+                .map_or_else(Vec::new, |path| {
+                    vec![Advice::Reveal(RevealAdvice {
+                        normalized_path: path.to_owned(),
+                        recovery_semantics: finding.evidence.clone(),
+                    })]
+                })
         }
     }
 }
@@ -274,7 +283,7 @@ impl HomebrewAdapter<'_> {
             }
         }
         for rule in rules.iter().filter(|rule| rule.adapter == "homebrew") {
-            for pattern in &rule.paths {
+            for pattern in rule.filesystem_patterns() {
                 let expansion = if pattern.starts_with("~/") {
                     expand_home_pattern(self.home_root, pattern, self.excludes).map(|paths| {
                         paths
@@ -341,7 +350,7 @@ impl HomebrewAdapter<'_> {
         inventory.items.sort_by(|left, right| {
             left.rule_id
                 .cmp(&right.rule_id)
-                .then_with(|| left.normalized_path.cmp(&right.normalized_path))
+                .then_with(|| left.subject.cmp(&right.subject))
         });
         inventory
     }
@@ -392,7 +401,7 @@ impl HomebrewAdapter<'_> {
         };
         inventory.items.push(InventoryItem {
             rule_id: rule_id.to_owned(),
-            normalized_path,
+            subject: FindingSubject::FilesystemPath { normalized_path },
             path: Some(path.clone()),
             measurements,
             observations,

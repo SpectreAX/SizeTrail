@@ -120,7 +120,7 @@ fn real_homebrew_storage_is_attributed_without_crossing_into_applications() {
         diagnostics(&document)
     );
     assert!(findings.iter().all(|finding| {
-        !finding["normalized_path"]
+        !finding["subject"]["normalized_path"]
             .as_str()
             .is_some_and(|path| path.starts_with("/Applications"))
     }));

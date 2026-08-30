@@ -6,7 +6,7 @@ use sizetrail::capacity::CapacityReport;
 use sizetrail::model::{
     CoverageGap, CoverageGapReason, DispositionAction, EnvironmentEnvelope, Measurement,
     MeasurementBasis, MeasurementCoverage, MeasurementCoverageStatus, MeasurementPlane,
-    MeasurementScope, MeasurementScopeKind, MeasurementValue, RegionStatus,
+    MeasurementQuantity, MeasurementScope, MeasurementScopeKind, MeasurementValue, RegionStatus,
 };
 use sizetrail::scan::{AdapterReport, scan};
 
@@ -157,6 +157,7 @@ fn every_measured_capacity_number_carries_its_basis() {
 fn measurement_schema_makes_basis_scope_coverage_and_uncertainty_explicit() {
     let measurement = Measurement {
         plane: MeasurementPlane::ToolchainAttribution,
+        quantity: MeasurementQuantity::AllocatedFootprint,
         basis: MeasurementBasis::AllocatedFootprint,
         scope: MeasurementScope {
             kind: MeasurementScopeKind::ToolchainStore,
@@ -175,6 +176,7 @@ fn measurement_schema_makes_basis_scope_coverage_and_uncertainty_explicit() {
     let serialized = serde_json::to_value(measurement).expect("measurement must serialize");
 
     assert_eq!(serialized["basis"], "allocated_footprint");
+    assert_eq!(serialized["quantity"], "allocated_footprint");
     assert_eq!(serialized["scope"]["kind"], "toolchain_store");
     assert_eq!(serialized["coverage"]["status"], "complete");
     assert_eq!(serialized["value"]["kind"], "interval_bytes");
@@ -182,4 +184,54 @@ fn measurement_schema_makes_basis_scope_coverage_and_uncertainty_explicit() {
         serialized["value"]["applicable_action"],
         "permanent_unlink_after_references_close"
     );
+}
+
+#[test]
+fn vendor_human_sizes_are_typed_as_rounded_ranges_not_exact_bytes() {
+    let measurement = Measurement {
+        plane: MeasurementPlane::ToolchainAttribution,
+        quantity: MeasurementQuantity::DaemonReclaimable,
+        basis: MeasurementBasis::DockerSystemDf,
+        scope: MeasurementScope {
+            kind: MeasurementScopeKind::ToolchainStore,
+            id: "docker.images".to_owned(),
+        },
+        coverage: MeasurementCoverage {
+            status: MeasurementCoverageStatus::Complete,
+            gap_ids: Vec::new(),
+        },
+        value: sizetrail::model::rounded_bytes("2.498GB (94%)")
+            .expect("verified Docker formatter output must parse"),
+    };
+    let serialized = serde_json::to_value(measurement).expect("measurement must serialize");
+
+    assert_eq!(serialized["quantity"], "daemon_reclaimable");
+    assert_eq!(serialized["basis"], "docker_system_df");
+    assert_eq!(serialized["value"]["kind"], "rounded_bytes");
+    assert_eq!(serialized["value"]["reported"], "2.498GB (94%)");
+    assert!(
+        serialized["value"]["lower_bound_bytes"]
+            .as_u64()
+            .expect("lower bound")
+            < 2_498_000_000
+    );
+    assert!(
+        serialized["value"]["upper_bound_bytes"]
+            .as_u64()
+            .expect("upper bound")
+            > 2_498_000_000
+    );
+    assert!(serialized["value"].get("bytes").is_none());
+
+    assert_eq!(
+        serde_json::to_value(sizetrail::model::rounded_bytes("158B").expect("byte value"))
+            .expect("value must serialize")["lower_bound_bytes"],
+        158
+    );
+    for invalid in ["", "-1GB", "1.2.3GB", "1XB", "2GB garbage", "2GB (%)"] {
+        assert!(
+            sizetrail::model::rounded_bytes(invalid).is_err(),
+            "accepted invalid vendor size {invalid:?}"
+        );
+    }
 }

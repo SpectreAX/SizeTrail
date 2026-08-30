@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 use crate::fsx::{ObjectMeasurements, Root, RootEntryKind};
 use crate::model::{
     DispositionAction, ExtentKind, ExtentObservation, Measurement, MeasurementBasis,
-    MeasurementCoverage, MeasurementCoverageStatus, MeasurementPlane, MeasurementScope,
-    MeasurementScopeKind, MeasurementValue, ObservationKind, ObservationRelation, ObservationScope,
-    SignalId, SignalObservation, StorageSignal, estimate_disposition, normalized_report_path,
+    MeasurementCoverage, MeasurementCoverageStatus, MeasurementPlane, MeasurementQuantity,
+    MeasurementScope, MeasurementScopeKind, MeasurementValue, ObservationKind, ObservationRelation,
+    ObservationScope, SignalId, SignalObservation, StorageSignal, estimate_disposition,
+    normalized_report_path,
 };
 
 pub(crate) fn expand_home_pattern(
@@ -162,6 +163,7 @@ pub(crate) fn measure_store_as(
         vec![
             Measurement {
                 plane: MeasurementPlane::ToolchainAttribution,
+                quantity: MeasurementQuantity::LogicalSize,
                 basis: MeasurementBasis::LogicalSize,
                 scope: MeasurementScope {
                     kind: MeasurementScopeKind::ToolchainStore,
@@ -174,6 +176,7 @@ pub(crate) fn measure_store_as(
             },
             Measurement {
                 plane: MeasurementPlane::ToolchainAttribution,
+                quantity: MeasurementQuantity::AllocatedFootprint,
                 basis: MeasurementBasis::AllocatedFootprint,
                 scope: MeasurementScope {
                     kind: MeasurementScopeKind::ToolchainStore,
@@ -197,6 +200,7 @@ pub(crate) fn measure_store_as(
             },
             Measurement {
                 plane: MeasurementPlane::DispositionEstimate,
+                quantity: MeasurementQuantity::DispositionEstimate,
                 basis: MeasurementBasis::PrivateFloorAllocatedCeiling,
                 scope: MeasurementScope {
                     kind: MeasurementScopeKind::ObjectSet,

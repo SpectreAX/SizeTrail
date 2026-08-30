@@ -35,7 +35,7 @@ pub fn normalized_report_path(home: &Path, path: &Path) -> Result<String, Findin
 pub fn finding_id(
     adapter_id: &str,
     rule_id: &str,
-    normalized_path: &str,
+    canonical_subject_key: &str,
 ) -> Result<String, FindingIdError> {
     if !valid_id(adapter_id) || adapter_id.contains(':') {
         return Err(FindingIdError::InvalidAdapterId);
@@ -43,18 +43,12 @@ pub fn finding_id(
     if !valid_id(rule_id) {
         return Err(FindingIdError::InvalidRuleId);
     }
-    if !(normalized_path == "~"
-        || normalized_path.starts_with("~/")
-        || normalized_path.starts_with('/'))
-        || normalized_path
-            .split('/')
-            .any(|component| matches!(component, "." | ".."))
-    {
+    if !valid_canonical_subject_key(canonical_subject_key) {
         return Err(FindingIdError::InvalidNormalizedPath);
     }
 
     let mut digest = 0xcbf2_9ce4_8422_2325_u64;
-    for component in [adapter_id, rule_id, normalized_path] {
+    for component in [adapter_id, rule_id, canonical_subject_key] {
         for byte in component.bytes().chain([0]) {
             digest ^= u64::from(byte);
             digest = digest.wrapping_mul(0x0000_0100_0000_01b3);
@@ -68,6 +62,17 @@ fn valid_id(value: &str) -> bool {
         && value.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._-".contains(&byte)
         })
+}
+
+fn valid_canonical_subject_key(value: &str) -> bool {
+    valid_normalized_subject(value) || value.strip_prefix("object_set:").is_some_and(valid_id)
+}
+
+fn valid_normalized_subject(value: &str) -> bool {
+    (value == "~" || value.starts_with("~/") || value.starts_with('/'))
+        && !value
+            .split('/')
+            .any(|component| matches!(component, "." | ".."))
 }
 
 fn is_normalized_absolute(path: &Path) -> bool {
@@ -142,6 +147,46 @@ pub enum RegionStatus {
     Unmeasurable,
 }
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FindingSubject {
+    FilesystemPath { normalized_path: String },
+    ToolchainObjectSet { object_set_id: String },
+}
+
+impl FindingSubject {
+    pub fn canonical_key(&self) -> Result<String, FindingIdError> {
+        match self {
+            Self::FilesystemPath { normalized_path }
+                if valid_normalized_subject(normalized_path) =>
+            {
+                Ok(normalized_path.clone())
+            }
+            Self::FilesystemPath { .. } => Err(FindingIdError::InvalidNormalizedPath),
+            Self::ToolchainObjectSet { object_set_id } if valid_id(object_set_id) => {
+                Ok(format!("object_set:{object_set_id}"))
+            }
+            Self::ToolchainObjectSet { .. } => Err(FindingIdError::InvalidNormalizedPath),
+        }
+    }
+
+    #[must_use]
+    pub fn filesystem_path(&self) -> Option<&str> {
+        match self {
+            Self::FilesystemPath { normalized_path } => Some(normalized_path),
+            Self::ToolchainObjectSet { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub fn display_value(&self) -> &str {
+        match self {
+            Self::FilesystemPath { normalized_path } => normalized_path,
+            Self::ToolchainObjectSet { object_set_id } => object_set_id,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct Finding {
     pub id: String,
@@ -149,7 +194,7 @@ pub struct Finding {
     pub rule_id: String,
     pub title: String,
     pub summary: String,
-    pub normalized_path: String,
+    pub subject: FindingSubject,
     pub mechanism: String,
     pub recoverability: String,
     pub sensitivity: String,
@@ -279,10 +324,26 @@ pub enum AdviceImpact {
 #[derive(Clone, Debug, Serialize)]
 pub struct Measurement {
     pub plane: MeasurementPlane,
+    pub quantity: MeasurementQuantity,
     pub basis: MeasurementBasis,
     pub scope: MeasurementScope,
     pub coverage: MeasurementCoverage,
     pub value: MeasurementValue,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MeasurementQuantity {
+    LogicalSize,
+    AllocatedFootprint,
+    DispositionEstimate,
+    VendorReportedSize,
+    DiskImageLogicalLimit,
+    HostAllocatedFootprint,
+    DaemonUsed,
+    DaemonReclaimable,
+    ObjectCount,
+    ActiveObjectCount,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -301,6 +362,7 @@ pub enum MeasurementBasis {
     PrivateSize,
     VolumeSpaceUsed,
     VendorReported,
+    DockerSystemDf,
     PrivateFloorAllocatedCeiling,
 }
 
@@ -344,7 +406,79 @@ pub enum MeasurementValue {
         ceiling_bytes: Option<u64>,
         applicable_action: DispositionAction,
     },
+    RoundedBytes {
+        reported: String,
+        lower_bound_bytes: u64,
+        upper_bound_bytes: u64,
+    },
+    ExactCount {
+        count: u64,
+    },
     Unmeasurable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RoundedBytesError;
+
+pub fn rounded_bytes(reported: &str) -> Result<MeasurementValue, RoundedBytesError> {
+    let mut fields = reported.split_ascii_whitespace();
+    let token = fields.next().ok_or(RoundedBytesError)?;
+    if let Some(percent) = fields.next()
+        && (fields.next().is_some()
+            || percent.len() <= 3
+            || !percent.starts_with('(')
+            || !percent.ends_with("%)")
+            || !percent[1..percent.len() - 2]
+                .bytes()
+                .all(|byte| byte.is_ascii_digit()))
+    {
+        return Err(RoundedBytesError);
+    }
+
+    let (number, unit_bytes) = [
+        ("EB", 1_000_000_000_000_000_000_u64),
+        ("PB", 1_000_000_000_000_000_u64),
+        ("TB", 1_000_000_000_000_u64),
+        ("GB", 1_000_000_000_u64),
+        ("MB", 1_000_000_u64),
+        ("kB", 1_000_u64),
+        ("B", 1_u64),
+    ]
+    .into_iter()
+    .find_map(|(suffix, bytes)| token.strip_suffix(suffix).map(|number| (number, bytes)))
+    .ok_or(RoundedBytesError)?;
+    let mut parts = number.split('.');
+    let whole = parts.next().ok_or(RoundedBytesError)?;
+    let fraction = parts.next().unwrap_or("");
+    if parts.next().is_some()
+        || whole.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(RoundedBytesError);
+    }
+    let scale = 10_u64
+        .checked_pow(u32::try_from(fraction.len()).map_err(|_| RoundedBytesError)?)
+        .ok_or(RoundedBytesError)?;
+    let mantissa = format!("{whole}{fraction}")
+        .parse::<u64>()
+        .map_err(|_| RoundedBytesError)?;
+    let center = mantissa.checked_mul(unit_bytes).ok_or(RoundedBytesError)?;
+    let (lower_bound_bytes, upper_bound_bytes) = if unit_bytes == 1 && fraction.is_empty() {
+        (center, center)
+    } else {
+        let lower = center.saturating_sub(unit_bytes) / scale;
+        let upper_numerator = center
+            .checked_add(unit_bytes)
+            .and_then(|value| value.checked_add(scale - 1))
+            .ok_or(RoundedBytesError)?;
+        (lower, upper_numerator / scale)
+    };
+    Ok(MeasurementValue::RoundedBytes {
+        reported: reported.to_owned(),
+        lower_bound_bytes,
+        upper_bound_bytes,
+    })
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]

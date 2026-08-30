@@ -18,7 +18,7 @@ pub struct Rule {
     pub adapter: String,
     pub title: String,
     pub description: String,
-    pub paths: Vec<String>,
+    pub subjects: Vec<RuleSubjectPattern>,
     pub os: String,
     pub mechanism: Mechanism,
     pub recoverability: Recoverability,
@@ -28,6 +28,22 @@ pub struct Rule {
     pub preconditions: Preconditions,
     pub selection_override: Option<bool>,
     pub override_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RuleSubjectPattern {
+    FilesystemPath { pattern: String },
+    ToolchainObjectSet { object_set_id: String },
+}
+
+impl Rule {
+    pub fn filesystem_patterns(&self) -> impl Iterator<Item = &str> {
+        self.subjects.iter().filter_map(|subject| match subject {
+            RuleSubjectPattern::FilesystemPath { pattern } => Some(pattern.as_str()),
+            RuleSubjectPattern::ToolchainObjectSet { .. } => None,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -143,8 +159,13 @@ fn invalid(rule: &Rule) -> bool {
         || rule.adapter.trim().is_empty()
         || rule.title.trim().is_empty()
         || rule.description.trim().is_empty()
-        || rule.paths.is_empty()
-        || rule.paths.iter().any(|path| path.trim().is_empty())
+        || rule.subjects.is_empty()
+        || rule.subjects.iter().any(|subject| match subject {
+            RuleSubjectPattern::FilesystemPath { pattern } => pattern.trim().is_empty(),
+            RuleSubjectPattern::ToolchainObjectSet { object_set_id } => {
+                object_set_id.trim().is_empty()
+            }
+        })
         || rule.os != ">=13.0"
         || rule.evidence.trim().is_empty()
         || rule.fixture_id.trim().is_empty()

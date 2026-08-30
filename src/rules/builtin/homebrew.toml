@@ -3,7 +3,7 @@ id = "homebrew.cache_downloads"
 adapter = "homebrew"
 title = "Homebrew download cache"
 description = "Downloaded source archives and bottles retained by Homebrew."
-paths = ["~/Library/Caches/Homebrew/downloads"]
+subjects = [{ kind = "filesystem_path", pattern = "~/Library/Caches/Homebrew/downloads" }]
 os = ">=13.0"
 mechanism = "generated"
 recoverability = "redownload_bandwidth"
@@ -17,9 +17,9 @@ id = "homebrew.cache_api"
 adapter = "homebrew"
 title = "Homebrew API cache"
 description = "Homebrew formula and cask API metadata."
-paths = [
-  "~/Library/Caches/Homebrew/api",
-  "~/Library/Caches/Homebrew/api-source",
+subjects = [
+  { kind = "filesystem_path", pattern = "~/Library/Caches/Homebrew/api" },
+  { kind = "filesystem_path", pattern = "~/Library/Caches/Homebrew/api-source" },
 ]
 os = ">=13.0"
 mechanism = "generated"
@@ -34,7 +34,7 @@ id = "homebrew.cache_bootsnap"
 adapter = "homebrew"
 title = "Homebrew Bootsnap cache"
 description = "Ruby load-path cache generated for Homebrew itself."
-paths = ["~/Library/Caches/Homebrew/bootsnap"]
+subjects = [{ kind = "filesystem_path", pattern = "~/Library/Caches/Homebrew/bootsnap" }]
 os = ">=13.0"
 mechanism = "generated"
 recoverability = "rebuild_time_cost"
@@ -48,15 +48,15 @@ id = "homebrew.cache_build_tools"
 adapter = "homebrew"
 title = "Homebrew build-tool caches"
 description = "Language and build-tool state created while Homebrew builds packages."
-paths = [
-  "~/Library/Caches/Homebrew/cargo_cache",
-  "~/Library/Caches/Homebrew/go_cache",
-  "~/Library/Caches/Homebrew/go_mod_cache",
-  "~/Library/Caches/Homebrew/glide_home",
-  "~/Library/Caches/Homebrew/java_cache",
-  "~/Library/Caches/Homebrew/npm_cache",
-  "~/Library/Caches/Homebrew/pip_cache",
-  "~/Library/Caches/Homebrew/gclient_cache",
+subjects = [
+  { kind = "filesystem_path", pattern = "~/Library/Caches/Homebrew/cargo_cache" },
+  { kind = "filesystem_path", pattern = "~/Library/Caches/Homebrew/go_cache" },
+  { kind = "filesystem_path", pattern = "~/Library/Caches/Homebrew/go_mod_cache" },
+  { kind = "filesystem_path", pattern = "~/Library/Caches/Homebrew/glide_home" },
+  { kind = "filesystem_path", pattern = "~/Library/Caches/Homebrew/java_cache" },
+  { kind = "filesystem_path", pattern = "~/Library/Caches/Homebrew/npm_cache" },
+  { kind = "filesystem_path", pattern = "~/Library/Caches/Homebrew/pip_cache" },
+  { kind = "filesystem_path", pattern = "~/Library/Caches/Homebrew/gclient_cache" },
 ]
 os = ">=13.0"
 mechanism = "generated"
@@ -71,7 +71,7 @@ id = "homebrew.logs"
 adapter = "homebrew"
 title = "Homebrew build logs"
 description = "Logs retained from Homebrew source builds."
-paths = ["~/Library/Logs/Homebrew"]
+subjects = [{ kind = "filesystem_path", pattern = "~/Library/Logs/Homebrew" }]
 os = ">=13.0"
 mechanism = "user_owned"
 recoverability = "unrecoverable"
@@ -85,7 +85,7 @@ id = "homebrew.cellar"
 adapter = "homebrew"
 title = "Homebrew installed formula kegs"
 description = "Versioned formula installations grouped by rack and keg."
-paths = ["$CELLAR/*/*"]
+subjects = [{ kind = "filesystem_path", pattern = "$CELLAR/*/*" }]
 os = ">=13.0"
 mechanism = "vendor_managed"
 recoverability = "redownload_bandwidth"
@@ -99,7 +99,7 @@ id = "homebrew.caskroom"
 adapter = "homebrew"
 title = "Homebrew cask metadata"
 description = "Versioned cask installation records retained under the Homebrew prefix."
-paths = ["$PREFIX/Caskroom/*"]
+subjects = [{ kind = "filesystem_path", pattern = "$PREFIX/Caskroom/*" }]
 os = ">=13.0"
 mechanism = "vendor_managed"
 recoverability = "redownload_bandwidth"
@@ -113,7 +113,7 @@ id = "homebrew.taps"
 adapter = "homebrew"
 title = "Homebrew tap repositories"
 description = "Formula and cask definitions checked out for configured taps."
-paths = ["$PREFIX/Library/Taps/*/*"]
+subjects = [{ kind = "filesystem_path", pattern = "$PREFIX/Library/Taps/*/*" }]
 os = ">=13.0"
 mechanism = "generated"
 recoverability = "redownload_bandwidth"

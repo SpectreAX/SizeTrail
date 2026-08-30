@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use sizetrail::model::{
-    Advice, AdviceImpact, CommandAdvice, Finding, FindingIdError, Measurement, ObservationKind,
-    ObservationRelation, ObservationScope, RevealAdvice, SignalId, SignalObservation, finding_id,
-    normalize_findings, normalized_report_path,
+    Advice, AdviceImpact, CommandAdvice, Finding, FindingIdError, FindingSubject, Measurement,
+    ObservationKind, ObservationRelation, ObservationScope, RevealAdvice, SignalId,
+    SignalObservation, finding_id, normalize_findings, normalized_report_path,
 };
 
 #[test]
@@ -69,7 +69,9 @@ fn structured_signals_have_a_deterministic_lossy_summary_order() {
         rule_id: "xcode.derived_data_build".to_owned(),
         title: "Fixture".to_owned(),
         summary: String::new(),
-        normalized_path: "~/Library/Developer/Xcode/DerivedData/App/Build".to_owned(),
+        subject: FindingSubject::FilesystemPath {
+            normalized_path: "~/Library/Developer/Xcode/DerivedData/App/Build".to_owned(),
+        },
         mechanism: "generated".to_owned(),
         recoverability: "rebuild_time_cost".to_owned(),
         sensitivity: "low".to_owned(),
@@ -91,6 +93,48 @@ fn structured_signals_have_a_deterministic_lossy_summary_order() {
         "compressed storage makes the private floor uninformative"
     );
     assert_eq!(findings[0].observations.len(), 2);
+}
+
+#[test]
+fn filesystem_and_toolchain_subjects_have_disjoint_canonical_keys() {
+    let path = FindingSubject::FilesystemPath {
+        normalized_path: "~/Library/Containers/com.docker.docker".to_owned(),
+    };
+    let object_set = FindingSubject::ToolchainObjectSet {
+        object_set_id: "docker.images".to_owned(),
+    };
+
+    assert_eq!(
+        path.canonical_key().expect("path subject must be valid"),
+        "~/Library/Containers/com.docker.docker"
+    );
+    assert_eq!(
+        object_set
+            .canonical_key()
+            .expect("object-set subject must be valid"),
+        "object_set:docker.images"
+    );
+    assert_eq!(
+        path.filesystem_path(),
+        Some("~/Library/Containers/com.docker.docker")
+    );
+    assert_eq!(object_set.filesystem_path(), None);
+    assert_ne!(
+        finding_id(
+            "docker",
+            "docker.images",
+            &path.canonical_key().expect("path key")
+        ),
+        finding_id(
+            "docker",
+            "docker.images",
+            &object_set.canonical_key().expect("object-set key")
+        )
+    );
+
+    let serialized = serde_json::to_value(object_set).expect("subject must serialize");
+    assert_eq!(serialized["kind"], "toolchain_object_set");
+    assert_eq!(serialized["object_set_id"], "docker.images");
 }
 
 #[test]

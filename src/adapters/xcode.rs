@@ -10,10 +10,10 @@ use crate::adapters::{
 };
 use crate::fsx::Root;
 use crate::model::{
-    Advice, AdviceImpact, CommandAdvice, Finding, Measurement, MeasurementBasis,
-    MeasurementCoverage, MeasurementCoverageStatus, MeasurementPlane, MeasurementScope,
-    MeasurementScopeKind, MeasurementValue, RevealAdvice, finding_id, normalize_findings,
-    normalized_report_path,
+    Advice, AdviceImpact, CommandAdvice, Finding, FindingSubject, Measurement, MeasurementBasis,
+    MeasurementCoverage, MeasurementCoverageStatus, MeasurementPlane, MeasurementQuantity,
+    MeasurementScope, MeasurementScopeKind, MeasurementValue, RevealAdvice, finding_id,
+    normalize_findings, normalized_report_path,
 };
 use crate::policy::{
     PolicyCtx, PolicyError, ProbeId, XCODE_CORE_SIMULATOR_VERSION, XCODE_FIRST_LAUNCH_STATUS,
@@ -71,7 +71,7 @@ impl ToolchainAdapter for XcodeAdapter<'_> {
         inventory.items.sort_by(|left, right| {
             left.rule_id
                 .cmp(&right.rule_id)
-                .then_with(|| left.normalized_path.cmp(&right.normalized_path))
+                .then_with(|| left.subject.cmp(&right.subject))
         });
         inventory
     }
@@ -87,7 +87,11 @@ impl ToolchainAdapter for XcodeAdapter<'_> {
             let rule = rules
                 .get(&item.rule_id)
                 .ok_or(InventoryGapReason::RuleSetInvalid)?;
-            let id = finding_id("xcode", &item.rule_id, &item.normalized_path)
+            let subject_key = item
+                .subject
+                .canonical_key()
+                .map_err(|_| InventoryGapReason::RuleSetInvalid)?;
+            let id = finding_id("xcode", &item.rule_id, &subject_key)
                 .map_err(|_| InventoryGapReason::RuleSetInvalid)?;
             let mut finding = Finding {
                 id,
@@ -95,7 +99,7 @@ impl ToolchainAdapter for XcodeAdapter<'_> {
                 rule_id: item.rule_id.clone(),
                 title: rule.title.clone(),
                 summary: String::new(),
-                normalized_path: item.normalized_path.clone(),
+                subject: item.subject.clone(),
                 mechanism: rule.mechanism.as_str().to_owned(),
                 recoverability: rule.recoverability.as_str().to_owned(),
                 sensitivity: rule.sensitivity.as_str().to_owned(),
@@ -115,7 +119,9 @@ impl ToolchainAdapter for XcodeAdapter<'_> {
     fn advise(&self, finding: &Finding) -> Vec<Advice> {
         match finding.rule_id.as_str() {
             "xcode.simulator_device" => finding
-                .normalized_path
+                .subject
+                .filesystem_path()
+                .unwrap_or_default()
                 .rsplit('/')
                 .next()
                 .filter(|udid| valid_udid(udid))
@@ -134,10 +140,12 @@ impl ToolchainAdapter for XcodeAdapter<'_> {
                 explanation: "Inspect Apple's runtime image manager, then use Xcode Settings > Components for removal; do not delete runtime mount paths directly.".to_owned(),
                 reliable_preview_available: true,
             })],
-            _ => vec![Advice::Reveal(RevealAdvice {
-                normalized_path: finding.normalized_path.clone(),
-                recovery_semantics: finding.evidence.clone(),
-            })],
+            _ => finding.subject.filesystem_path().map_or_else(Vec::new, |path| {
+                vec![Advice::Reveal(RevealAdvice {
+                    normalized_path: path.to_owned(),
+                    recovery_semantics: finding.evidence.clone(),
+                })]
+            }),
         }
     }
 }
@@ -227,14 +235,14 @@ impl XcodeAdapter<'_> {
         inventory.items.sort_by(|left, right| {
             left.rule_id
                 .cmp(&right.rule_id)
-                .then_with(|| left.normalized_path.cmp(&right.normalized_path))
+                .then_with(|| left.subject.cmp(&right.subject))
         });
         Ok(inventory)
     }
 
     fn expand_rule(&self, rule: &Rule, volume_has_snapshots: bool, inventory: &mut Inventory) {
         let mut paths = BTreeSet::new();
-        for pattern in &rule.paths {
+        for pattern in rule.filesystem_patterns() {
             match expand_home_pattern(self.root, pattern, self.excludes) {
                 Ok(matches) => paths.extend(matches),
                 Err((path, error)) => inventory.gaps.push(io_gap(
@@ -261,7 +269,7 @@ impl XcodeAdapter<'_> {
                     };
                     inventory.items.push(InventoryItem {
                         rule_id: rule.id.clone(),
-                        normalized_path,
+                        subject: FindingSubject::FilesystemPath { normalized_path },
                         path: Some(path),
                         measurements,
                         observations,
@@ -396,7 +404,7 @@ impl XcodeAdapter<'_> {
                 let normalized_path = format!("~/Library/Developer/CoreSimulator/Devices/{udid}");
                 inventory.items.push(InventoryItem {
                     rule_id: "xcode.simulator_device".to_owned(),
-                    normalized_path,
+                    subject: FindingSubject::FilesystemPath { normalized_path },
                     path: Some(path),
                     measurements,
                     observations,
@@ -454,17 +462,23 @@ impl XcodeAdapter<'_> {
                     .push(probe_gap(InventoryGapReason::InvalidToolOutput));
                 continue;
             }
-            let normalized_path = runtime
+            let subject = runtime
                 .bundle_path
                 .as_deref()
                 .and_then(|path| normalized_report_path(self.root.path(), Path::new(path)).ok())
-                .unwrap_or_else(|| format!("/@simctl/runtimes/{identifier}"));
+                .map_or_else(
+                    || FindingSubject::ToolchainObjectSet {
+                        object_set_id: format!("xcode.simulator_runtime.{identifier}"),
+                    },
+                    |normalized_path| FindingSubject::FilesystemPath { normalized_path },
+                );
             inventory.items.push(InventoryItem {
                 rule_id: "xcode.simulator_runtime".to_owned(),
-                normalized_path,
+                subject,
                 path: None,
                 measurements: vec![Measurement {
                     plane: MeasurementPlane::ToolchainAttribution,
+                    quantity: MeasurementQuantity::VendorReportedSize,
                     basis: MeasurementBasis::VendorReported,
                     scope: MeasurementScope {
                         kind: MeasurementScopeKind::ToolchainStore,

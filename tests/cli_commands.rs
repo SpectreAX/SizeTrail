@@ -60,7 +60,7 @@ fn explain_from_is_snapshot_only_and_validates_schema_and_id_versions() {
     let report = fixture.path().join("report.json");
     std::fs::write(
         &report,
-        r#"{"schema_version":"0.1.0-unstable","environment":{"generated_at_unix_seconds":1800000000},"payload":{"findings":[{"id":"f1:xcode:0123456789abcdef","normalized_path":"~/Library/Developer/Xcode/Archives/Fixture"}]}}"#,
+        r#"{"schema_version":"0.1.0-unstable","environment":{"generated_at_unix_seconds":1800000000},"payload":{"findings":[{"id":"f1:xcode:0123456789abcdef","subject":{"kind":"filesystem_path","normalized_path":"~/Library/Developer/Xcode/Archives/Fixture"}}]}}"#,
     )
     .expect("snapshot fixture must be written");
 
@@ -96,6 +96,22 @@ fn explain_from_is_snapshot_only_and_validates_schema_and_id_versions() {
         .output()
         .expect("future-schema explain must run");
     assert!(!future.status.success());
+
+    let object_report = report.with_file_name("object-set.json");
+    std::fs::write(
+        &object_report,
+        r#"{"schema_version":"0.1.0-unstable","environment":{"generated_at_unix_seconds":1800000000},"payload":{"findings":[{"id":"f1:docker:0123456789abcdef","subject":{"kind":"toolchain_object_set","object_set_id":"docker.images"}}]}}"#,
+    )
+    .expect("object-set fixture must be written");
+    let object_path = cargo_bin_cmd!("sizetrail")
+        .args(["explain", "f1:docker:0123456789abcdef", "--path", "--from"])
+        .arg(&object_report)
+        .output()
+        .expect("object-set explain must run");
+    assert!(!object_path.status.success());
+    assert!(
+        String::from_utf8_lossy(&object_path.stderr).contains("finding has no filesystem path")
+    );
 }
 
 #[test]

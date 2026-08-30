@@ -261,7 +261,10 @@ fn home_and_prefix_stores_remain_separate_and_keg_identity_comes_from_directorie
         .find(|item| item.rule_id == "homebrew.cache_downloads")
         .expect("HOME-side cache must be measured");
     assert_eq!(
-        download.normalized_path,
+        download
+            .subject
+            .filesystem_path()
+            .expect("cache must have a filesystem subject"),
         "~/Library/Caches/Homebrew/downloads"
     );
     assert_eq!(exact_bytes(download, MeasurementBasis::LogicalSize), 8);
@@ -283,7 +286,13 @@ fn home_and_prefix_stores_remain_separate_and_keg_identity_comes_from_directorie
                 inventory.items, inventory.gaps
             )
         });
-    assert_eq!(cellar.normalized_path, "/opt/homebrew/Cellar/example/1.2.3");
+    assert_eq!(
+        cellar
+            .subject
+            .filesystem_path()
+            .expect("keg must have a filesystem subject"),
+        "/opt/homebrew/Cellar/example/1.2.3"
+    );
     assert!(
         inventory
             .items
@@ -391,7 +400,13 @@ fn caskroom_symlink_targets_outside_prefix_become_gaps_without_becoming_measurem
             .expect("link metadata must be readable")
             .len()
     );
-    assert!(!caskroom.normalized_path.starts_with("/Applications"));
+    assert!(
+        !caskroom
+            .subject
+            .filesystem_path()
+            .expect("caskroom must have a filesystem subject")
+            .starts_with("/Applications")
+    );
 }
 
 #[test]
@@ -427,12 +442,12 @@ fn an_unavailable_prefix_root_keeps_home_measurements_and_declares_the_boundary_
             .iter()
             .any(|item| item.rule_id == "homebrew.cache_downloads")
     );
-    assert!(
-        inventory
-            .items
-            .iter()
-            .all(|item| !item.normalized_path.starts_with("/opt/homebrew"))
-    );
+    assert!(inventory.items.iter().all(|item| {
+        !item
+            .subject
+            .filesystem_path()
+            .is_some_and(|path| path.starts_with("/opt/homebrew"))
+    }));
     assert!(inventory.gaps.iter().any(|gap| {
         gap.reason == sizetrail::adapters::InventoryGapReason::AccessDenied
             && gap.stage == Some(sizetrail::adapters::InventoryStage::RootInitialization)
