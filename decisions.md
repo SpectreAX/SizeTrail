@@ -1177,6 +1177,68 @@ hosted CI 全绿，是因为 runner 上没有这类 cask。那不是覆盖，是
 
 ---
 
+## Q55 — finding 定位符不再假定所有对象都有文件路径
+
+**决策：finding 与内置规则使用类型化 subject，而不是强制 `normalized_path`。**
+
+两种 v1 subject：
+
+- `filesystem_path { normalized_path }`：现有 Xcode/Homebrew 与 Docker VM disk image；
+- `toolchain_object_set { object_set_id }`：Docker daemon 的 images、containers、volumes、BuildKit cache 等没有独立宿主路径的对象集合。
+
+Docker Desktop 把这些对象共同存放在一个 VM disk image 中。把四类对象都指向
+`Docker.raw` 会把 backing store 冒充对象自身的位置，并使 `explain --path` 暗示这个
+不可直接删除的文件是可操作路径；为它们伪造 `/docker/...` 则会把非路径冒充机器路径。
+两者都违反 Q8 的归因边界与 Q11 的 advice 契约。
+
+finding ID 格式继续是 `f1:<adapter_id>:<digest>`。digest 输入从
+`adapter + rule + normalized_path` 推广为 `adapter + rule + canonical subject key`：
+filesystem subject 的 canonical key **保持原 normalized path 不变**，因此既有 finding ID
+不变；toolchain object set 使用带类型前缀的稳定 key。`explain --path` 只对
+filesystem subject 成功，绝不为 object set 合成路径。
+
+内置 TOML 同步使用 tagged subject pattern；新增静态规则仍只需 TOML + fixture，不要求
+理解 Rust adapter contract（Q16）。
+
+被否：把所有 Docker 类别定位到 `Docker.raw`；伪造路径；把 Docker 压成一个 VM disk
+finding 而丢掉 images/containers/volumes/build cache 的风险差异。
+
+影响：Q24 的 digest 输入表述；`Finding`、规则 schema、`explain --path`、fixture 与 v1 JSON。
+
+---
+
+## Q56 — Docker daemon 舍入数字必须按舍入证据建模
+
+**决策：v1 使用版本门控的 Docker CLI，不为追求原始整数新增 Engine API transport。**
+
+`docker system df --format json` 的 `Size` 与 `Reclaimable` 字段仍是
+`go-units.HumanSize` 生成的有限精度字符串（如 `2.631GB`），不是原始 byte。把解析后的
+中心值序列化为 `exact_bytes` 会违反 truth contract。v1 将其表示为
+`rounded_bytes { reported, lower_bound_bytes, upper_bound_bytes }`，边界由已验证 CLI 版本的
+格式精度机械推导；原始 vendor string 同时保留。整数 `B` 输出可收敛为相等边界，但仍保留
+`rounded_bytes` 类型以公开来源。
+
+`Measurement` 新增类型化 `quantity`，至少区分 disk-image logical limit、host allocated
+footprint、daemon used、daemon reclaimable、object count 与 active count。quantity 是「测的
+是什么」，basis 是「怎样测得」，两者不得通过自由字符串 `scope.id` 或泛化的
+`vendor_reported` 偷渡。
+
+Docker probe 闭集为：验证 `desktop-linux` context endpoint、版本门控、
+`system df --format json`。全部使用 Docker.app 内的绝对 CLI 路径、固定参数、每次扫描至多
+一次，并清除 Docker 连接重定向环境变量。context 不是可信名字：它可指向远程 daemon，故
+必须确认 endpoint 是当前 HOME 下 Docker Desktop 的 Unix socket 后才连接。
+
+`system df` 会遍历 daemon 的 image/container/volume filesystems，可能唤醒 Resource Saver，
+两项均进入 side-effect registry；无自动重试。未知版本、endpoint 不匹配、timeout 或解析失败
+均 typed degraded，但不得阻断宿主 VM disk image 的静态计量。
+
+被否：直接连接 Engine API `/system/df`。它能返回原始整数，但会新增 Unix socket、HTTP
+解析、API 协商与 IPC policy 通道；当前没有证据表明这份复杂度优于诚实的 vendor 舍入区间。
+
+影响：`Measurement` schema、Docker adapter、policy registry、通道覆盖矩阵与 v1 口径文档。
+
+---
+
 ## 附录 A — 实测环境基线
 
 采集于 2026-08-26，作为规则表量级参考与回归基线：

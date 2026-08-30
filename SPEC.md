@@ -89,6 +89,13 @@ mole 已有 allocated-size、硬链接去重、purgeable 标量与若干 insight
 
 `container allocated` 与 `volume used` 即使数值偶然相等也不得合并；它们的 scope 与 basis 不同。
 
+**v1 measurement 还必须显式携带 `quantity`（Q56）。** `quantity` 回答「测的是什么」，
+`basis` 回答「怎样测得」；两者不得互相代替。Docker 至少使用
+`disk_image_logical_limit`、`host_allocated_footprint`、`daemon_used`、
+`daemon_reclaimable`、`object_count`、`active_object_count`。Docker CLI 的 human-size
+字符串使用 `rounded_bytes { reported, lower_bound_bytes, upper_bound_bytes }`，不得转写为
+`exact_bytes`。只有原始整数来源才可用 exact value。
+
 ### 2.2 三个必须正确处理的计量陷阱
 
 **(1) `st_blocks` 是 allocated footprint，不是物理占用。** 它解决稀疏文件但**不解决 clone**。实测：20MB 文件 `cp -c` 后两文件各报 `blocks=40960`，`du -sk` 对约 20MB 物理占用报 40MB。
@@ -362,6 +369,20 @@ simdiskimaged，必须进入 side-effect registry 并提供同一个关闭开关
 Devices root 时 devices probe 调用为 0。simctl stderr 原文只写 stderr，payload 只保留
 稳定 typed warning。advice 可展示 `xcrun simctl`，但 SizeTrail 不执行。
 
+**P5 Docker Desktop（Q55、Q56）：** Docker daemon 的 images、containers、volumes 与
+BuildKit cache 是 typed object set，不是可伪造为 `Docker.raw` 的文件路径。adapter 只通过
+Docker.app 内绝对 CLI 执行三条闭集 probe：context inspect、version JSON、system-df JSON；
+每条每次扫描至多一次，共用 `SIZETRAIL_NO_DOCKER_PROBE`。连接 daemon 前必须验证
+`desktop-linux` endpoint 为当前 HOME 下的 Docker Desktop Unix socket；清除
+`DOCKER_HOST`、`DOCKER_CONTEXT`、`DOCKER_CONFIG`、`DOCKER_API_VERSION`、
+`DOCKER_CERT_PATH`、`DOCKER_TLS_VERIFY` 等重定向输入。unknown version 或 endpoint mismatch
+均 fail closed，且 system-df 调用数为 0。
+
+`system df --format json` 的 size/reclaimable 是 vendor 舍入字符串，按 Q56 输出
+`rounded_bytes`，basis 为 `docker_system_df`；禁止标为 exact。该命令可能唤醒 Resource
+Saver，并会遍历 daemon 中的 image/container/volume filesystems，二者均登记为已知读副作用。
+静态 VM disk image 计量不依赖 daemon probe 成功，且不得与 daemon 数字求和或相减。
+
 ### 5.3 验证矩阵（Q12）
 
 **API/deployment target 与验证矩阵是分离的两件事。**
@@ -483,14 +504,26 @@ relation priority → signal ID → scope → finding ID
 
 fixture 必须覆盖 tie-break。`--explain` 展开完整 observation/relation/scope 集合，**必须无损**。
 
-### 7.2 Finding ID（Q24）
+### 7.2 Finding subject 与 ID（Q24、Q55）
+
+finding 的定位是 tagged union：
+
+```text
+filesystem_path { normalized_path }
+toolchain_object_set { object_set_id }
+```
+
+内置规则使用同构的 tagged subject pattern。`filesystem_path` 的 pattern 可展开文件系统
+对象；`toolchain_object_set` 只能由对应的 compiled adapter 产生，不能携带命令或路径。
+`explain --path` 只接受 filesystem subject；object set 必须明确返回“没有文件系统路径”。
 
 ```text
 f1:<adapter_id>:<digest>
 ```
 
-- `digest` 由**版本化算法**根据 `adapter_id + rule_id + normalized_path` 派生。
-- `normalized_path` 是 **HOME 相对**的规范化路径。
+- `digest` 由**版本化算法**根据 `adapter_id + rule_id + canonical subject key` 派生。
+- filesystem subject 的 key 仍是 **HOME 相对**的 normalized path，保持既有 f1 ID 不变。
+- toolchain object set 的 key 带显式类型前缀，不能与真实路径碰撞。
 - **绝不使用发现序号。**
 
 ### 7.3 Advice（Q11）
@@ -516,7 +549,7 @@ enum Advice {
 - `docker system prune --volumes` 可精确展示，但**必须**同时说明它会删除 stopped containers、未使用对象及 anonymous volumes；**不得包装成推荐的一键下一步**。
 - 前后差异由用户再次运行 `scan` 获得。**永不自动运行建议命令。**
 
-**Reveal 只打印路径（Q14）。** Finder reveal 可能启动 File Provider、枚举目录、生成缩略图并写 Finder 自身状态，不能混入零副作用契约。路径是一等机器输出，用户自行组合 `open -R`。
+**Reveal 只适用于 filesystem subject 并只打印路径（Q14、Q55）。** Finder reveal 可能启动 File Provider、枚举目录、生成缩略图并写 Finder 自身状态，不能混入零副作用契约。路径是一等机器输出，用户自行组合 `open -R`。toolchain object set 只能得到 adapter 的 typed command advice 与解释，不能伪造 Reveal 路径。
 
 ---
 
@@ -769,7 +802,7 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | 模式 | 行为 | provenance |
 |---|---|---|
 | `explain <id>` | 只重探 **owning adapter**。finding 消失时返回 typed `not_found_after_rescan`，**不回退扫描其他 adapter** | live |
-| `explain <id> --from <file\|->` | 只读取用户显式提供的报告输入；不重探报告路径、不运行 adapter 或外部工具。file 模式除该报告文件外不访问文件系统；stdin 模式只读 stdin。校验 schema 版本与 ID 算法版本 | `snapshot_only` |
+| `explain <id> --from <file\|->` | 只读取用户显式提供的报告输入；不重探报告路径、不运行 adapter 或外部工具。file 模式除该报告文件外不访问文件系统；stdin 模式只读 stdin。校验 schema 版本与 ID 算法版本；`--path` 对 object-set subject 显式失败 | `snapshot_only` |
 
 `--from` 模式必须标记报告时间及「当前路径可能已变化」；`--path` 输出**报告捕获时**的路径，**不声称当前身份仍匹配**。
 
@@ -853,7 +886,7 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | **P3** | typed adapter contract | 契约 trait 冻结；`not_present` / 未知版本降级路径有测试；adapter 的真实 probe 注册进 P1 已建立的 side-effect registry；重新推导通道覆盖矩阵并加入本阶段所有命令、子进程与 daemon 通道 |
 | **P4** | 首个深 adapter + CLI/JSON | Xcode/CoreSimulator（Q29 已将 Homebrew 移出本阶段）；§10.2 全部 13 项通过；§10.4 人工验证完成 → **发布 v0.1 技术预览（schema 明确不稳定）** |
 | **P4.1** | Homebrew adapter | 复用 P3 契约，无新增控制面 → **发布 v0.2** |
-| **P5** | Docker adapter + 稳定化 | 第三个深 adapter；schema 冻结并文档化；完整口径文档；真机验收 → **发布 v1.0** |
+| **P5** | Docker adapter + 稳定化 | §12.3 顺序 DoD 全部完成；第三个深 adapter；schema 冻结并文档化；完整口径文档；真机验收 → **发布 v1.0** |
 | **v1.x** | 第四个 adapter | Go（`GOCACHE`、`GOMODCACHE`）+ 版本门控 |
 
 **工期估算**（30 小时/人周，从零实现）：P1–P4 约 10–15 人周；P5 使总量达 22–28 人周。**该口径已被 P1–P1.3 的实际速度证明不适用于当前工作流（Q29），此处仅保留为范围相对大小的参考，不得作为发布承诺或范围裁剪依据。**
@@ -982,6 +1015,130 @@ prefix 位于 HOME 之外，因此需要**为 prefix 单独 `Root::open`**。若
 - `--no-homebrew` 已接线（当前 flag 已声明但从未被读取）；`explain` 的 `f1:xcode:` 前缀硬编码已泛化；`validate_excludes` 已覆盖 Homebrew root。
 - `COMPILED_ADAPTER_IDS` 含 `"homebrew"`，`builtin_rules()` 解析两张表。
 - 生成文档重生成；release notes 落 `docs/release-notes/v0.2.0.md` → **发布 v0.2**。
+
+---
+
+## 12.3 P5 — Docker Desktop adapter 与 v1 schema 稳定化（Q55–Q56）
+
+本阶段严格按下列小节推进；前一小节的测试与门禁未绿，不进入下一小节。Docker Desktop
+把多种 daemon 对象封装在同一 VM disk image 中，因此“宿主文件计量”与“daemon 分类计量”
+是两个不相加的证据面，不能用其中一个替代另一个。
+
+### 12.3.0 v1 schema 前置
+
+1. `Finding.normalized_path` 改为 Q55 的 tagged `subject`；filesystem subject 保持既有 f1
+   digest 输入，object-set subject 使用带类型前缀的 canonical key。
+2. 内置规则从纯 `paths` 改为同构 tagged subject patterns；静态规则贡献仍只需 TOML +
+   fixture。规则 schema 继续 `deny_unknown_fields`，且绝无 command 字段。
+3. `Measurement` 增加 typed `quantity`；`MeasurementValue` 增加 Q56 的
+   `rounded_bytes`。舍入边界算法必须有 formatter fixture，且任何无法证明格式精度的输入
+   直接 unmeasurable，不能给伪区间。
+4. `explain --path` 对 object set 显式失败；filesystem finding 的既有 ID fixture 必须不变。
+5. 本小节只建立表达能力，不注册 Docker probe；测试先红后绿。
+
+### 12.3.1 probe 闭集与版本门控
+
+生产只允许 Docker.app 自带的绝对 binary。registry 顺序与上限：
+
+| probe id | 固定语义 | max | timeout | 已知副作用 |
+|---|---|---:|---:|---|
+| `docker.context_inspect` | 读取 `desktop-linux` endpoint JSON | 1 | 10s | 读取 Docker CLI 用户配置 |
+| `docker.version` | 固定 context 的 client/server JSON | 1 | 15s | 连接 daemon，可能唤醒 Resource Saver |
+| `docker.system_df` | 固定 context 的 summary JSON | 1 | 120s | 可能唤醒 VM；遍历 image/container/volume filesystems |
+
+要求：
+
+1. context endpoint 必须是 `unix://<HOME>/.docker/run/docker.sock`；TCP、SSH、系统 socket、
+   其他 HOME 或无法解析一律 `InvalidSelection`，且后两条调用均为 0。
+2. 清除全部已知 Docker 连接重定向环境变量；命令、参数、context 名均不得来自用户输入。
+3. client version、server version、Docker Desktop platform 与 negotiated API 必须落在 checked-in
+   verified set；未知组合 `Degraded { UnknownVersion }`，system-df 调用为 0。
+4. `system df` stdout 必须恰好解析成四类 typed row：images、containers、local volumes、
+   build cache。缺类、重复类、未知类、负数、溢出、非 UTF-8 或额外 stdout 均 typed gap。
+5. disabled、timeout、nonzero 与 malformed output 各有 fixture；无自动重试。
+
+### 12.3.2 宿主 VM disk image
+
+默认位置：`~/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw`。同时支持：
+
+- 当前 `~/Library/Group Containers/group.com.docker/settings-store.json` 的 `DataFolder`；
+- Docker Desktop 4.34 及更早 `settings.json` 的 `dataFolder`；
+- legacy `Docker.qcow2`。
+
+设置文件先经 HOME `Root::measure_object` 与 dataless gate，再读取内容。自定义 DataFolder
+为独立 `Root`；finding 单独报告，绝不与 HOME Root 或 daemon category 求和。raw 与 qcow2
+同时存在且无法由已验证版本规则唯一选择时发 typed `ambiguous_disk_image`，不得相加。
+
+disk image finding 只报告：
+
+- apparent/logical limit：`quantity=disk_image_logical_limit`，`basis=logical_size`；
+- host allocated footprint：`quantity=host_allocated_footprint`，`basis=allocated_footprint`。
+
+它不产生 disposition interval：删除 VM disk 等于丢失全部 image、container 与 volume，不能
+让一个删除上界把这种操作包装成普通 store 清理。daemon unavailable 或 unknown version
+不得阻断这两项静态计量。
+
+### 12.3.3 daemon object-set inventory
+
+summary row 映射为四个 `toolchain_object_set` finding：
+
+| object_set_id | rule id | 必需 quantity |
+|---|---|---|
+| `docker.images` | `docker.images` | object_count、active_object_count、daemon_used、daemon_reclaimable |
+| `docker.containers` | `docker.containers` | 同上 |
+| `docker.volumes` | `docker.volumes` | 同上 |
+| `docker.build_cache` | `docker.build_cache` | 同上 |
+
+counts 是 vendor 原始整数；size/reclaimable 永远使用 `rounded_bytes` +
+`basis=docker_system_df`。四类不得求和成“daemon total”：image shared layers 与不同 storage
+driver 口径可能重叠。也不得从 host allocated 中相减得到 VM overhead 或 unknown。
+
+Docker Desktop 在 classic/containerd store 间切换时，daemon 只显示 active store；旧 store
+仍可能留在同一 disk image。每份成功报告固定携带
+`daemon_inventory_excludes_inactive_store` declared-scope gap。单次 scan 也不提供 actual host
+free delta；该数字只有用户执行厂商命令后比较两份独立报告才存在，口径文档必须明说。
+
+### 12.3.4 rules 与 advice
+
+内置规则：`docker.virtual_disk`、`docker.images`、`docker.containers`、`docker.volumes`、
+`docker.build_cache`。每条均有非空 evidence 与 fixture。
+
+- virtual disk、containers、volumes 为高风险/用户状态，不给出直接文件删除建议；
+- images 为 re-downloadable，build cache 为 rebuildable；
+- command advice 只使用当前 verified Docker CLI 支持的官方命令，固定
+  `--context desktop-linux`，绝不附加 `--force` / `--yes` / shell pipeline；
+- 若展示 `docker system prune --volumes`，必须明确它会删除 stopped containers、未使用
+  network/image/build cache 及未使用 anonymous volumes，且不是推荐的一键下一步；
+- `Docker.raw` / `Docker.qcow2` 永不进入 RevealAdvice 的“可删除”语义。
+
+### 12.3.5 CLI、coverage 与测试
+
+1. `scan` / `doctor` 接线 `--no-docker`；excluded 为退出 0。
+2. live `explain` 只重探 Docker owner；`--from` 对 object set 零 probe；`--path` 明确失败。
+3. exact `--exclude` 覆盖默认与自定义 disk-image Root，并在任何 probe/stat 前生效；object set
+   不接受路径 exclude，使用 `--no-docker`。
+4. TreeSnapshot、deny-write sandbox 与 registry count 覆盖三个 Docker probe；sandbox 关闭
+   Docker probe 但仍断言静态 disk image measurement 确实执行。
+5. fixture 覆盖默认/custom/legacy/ambiguous disk image、context mismatch、unknown version、
+   disabled、timeout、malformed/partial/duplicate system-df、四类 row、舍入边界与 advice。
+6. 维护者真实 Docker Desktop 机器执行 `doctor`、text scan、JSON scan、live explain，并记录
+   Docker Desktop/CLI/Engine/API 精确版本与 context endpoint。hosted runner 无 Docker Desktop
+   时不得把 `not_present` 冒充真机正例。
+7. Docker fixture benchmark 记录墙钟时间；数字只发布为 runner+fixture 原始值，不推广。
+
+### 12.3.6 v1 freeze 与 Definition of Done
+
+- `COMPILED_ADAPTER_IDS` 为恰好 `homebrew`、`xcode`、`docker`；规则与 fixtures 全绿。
+- registry 精确新增三条 Docker probe，并证明所有早退路径的调用上限。
+- §12.1 通道覆盖矩阵重新推导，至少新增三条 CLI、context 配置读取、settings 读取、外置
+  DataFolder Root、VM disk metadata、daemon/Resource Saver IPC 与 inactive-store 空格。
+- schema version 变为 `1.0.0`；生成并逐字节锁定 JSON Schema、fixture report、coverage/unknown
+  baseline 与 measurement-basis 文档。v0.x report 不得被 v1 `--from` 尽力误读。
+- README 只转写生成片段；版本号/章节号/日期仅使用 §9.1 窄允许清单。所有公开数字经 fixture
+  或 support-matrix 生成。
+- required CI、dependency policy、zero-write sandbox 全绿；维护者真机验收记录齐备。
+- 执行 `/ponytail-review`、`/ponytail-audit` 与 `/ponytail-debt`，处理阻塞项。
+- release notes 落 `docs/release-notes/v1.0.0.md`，使用 `--notes-file` 发布 v1.0。
 
 ---
 
