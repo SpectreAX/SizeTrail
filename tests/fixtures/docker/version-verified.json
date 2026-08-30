@@ -1,0 +1,1 @@
+{"Client":{"Platform":{"Name":"Docker Engine - Community"},"Version":"29.7.2","ApiVersion":"1.55","DefaultAPIVersion":"1.55","Context":"desktop-linux"},"Server":{"Platform":{"Name":"Docker Desktop 4.88.1 (237512)"},"Version":"29.7.2","ApiVersion":"1.55","MinAPIVersion":"1.40","Os":"linux","Arch":"arm64"}}

@@ -822,9 +822,9 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 
 **每个阶段必须满足其 Definition of Done 才可进入下一阶段。不允许并行推进或跳阶。**
 
-**通道覆盖矩阵是 P2 起的常设交付物。** P2、P3 与 P4 完成前都必须基于阶段后代码重新推导矩阵，并为本阶段新开的通道增加行，不能只沿用上一阶段结论。P2 至少逐项列出 `fsx/sys.rs` 内每个 `extern` 声明，以及读操作诱发的系统代写；P3 至少逐项列出每个外部命令、子进程与未沙箱化 daemon 的状态变化通道；P4 继续加入每条 `simctl`、规则解析、显式报告文件读取、completion 与新增依赖的运行时通道。
+**通道覆盖矩阵是 P2 起的常设交付物。** P2 起每个阶段及阶段内小节完成前都必须基于阶段后代码重新推导矩阵，并为本次新开的通道增加行，不能只沿用上一版结论。P2 至少逐项列出 `fsx/sys.rs` 内每个 `extern` 声明，以及读操作诱发的系统代写；P3 至少逐项列出每个外部命令、子进程与未沙箱化 daemon 的状态变化通道；P4 继续加入每条 `simctl`、规则解析、显式报告文件读取、completion 与新增依赖的运行时通道；P5 逐小节加入 Docker CLI、配置读取、VM metadata 与 daemon IPC。
 
-### 12.1 当前 P4.1 通道覆盖矩阵
+### 12.1 当前 P5.1 通道覆盖矩阵
 
 `静态`包含 crate-root forbid、豁免边界、Clippy 清单锁；`符号锁`包含 extern 精确集合、无直接 `libc`、无 build script、禁止 inline asm/dynamic lookup；`运行时`包含 TreeSnapshot、高价值路径兜底与 deny-write sandbox；`专用`是本行的行为/差分 fixture。`—` 表示该层不覆盖，不能据此扩张安全声明。
 
@@ -855,8 +855,13 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | Homebrew keg receipt 解析 | 先经 prefix `Root::measure_object`，再 safe read | `getattrlist` 精确符号集 | Homebrew TreeSnapshot + scan sandbox | — | fixture 只读取 `installed_on_request`；字段缺失保持 unknown，receipt 的名字与 artifact target 均不作为归因证据 |
 | Homebrew store 符号链接枚举与 link text | safe `read_link`；不 `stat`/canonicalize target | `getattrlist` 精确符号集 | Homebrew dangling-target fixture + TreeSnapshot + scan sandbox | — | Cellar/Cask cache 链接只计自身；Caskroom staged link 只作 prefix 外 gap 证据；`/Applications` 永不进入 region |
 | `brew.env` 改向 `HOMEBREW_CACHE` / `HOMEBREW_LOGS` | — | — | — | — | **未覆盖**：v0.2 不读取或解析 `brew.env`；仅当默认 cache **根**不存在时发一条 `unsupported_path_override`（`declared_scope_boundary`）。子目录缺席是常态，不发 gap |
-| 外部命令 / 子进程 | `Command` 仅 policy | — | sandbox 逐子命令覆盖直接进程写尝试 | 是 | registry 精确锁定六条 Xcode/CoreSimulator probe；adapter 只能提交 `ProbeId`，不能提交程序、参数或用户输入 |
+| 外部命令 / 子进程 | `Command` 仅 policy | — | sandbox 逐子命令覆盖直接进程写尝试 | 是 | registry 精确锁定六条 Xcode/CoreSimulator 与三条 Docker probe；adapter 只能提交 `ProbeId`，不能提交程序、参数或用户输入 |
 | Homebrew 外部命令 / 子进程 | `Command` 仅 policy；Homebrew 无 probe id | — | Homebrew read-only harness + scan sandbox | 精确为 0 | 完整 Homebrew inventory 后逐 registry id 断言计数仍为 0；`SIDE_EFFECT_REGISTRY` 精确集合测试锁住未新增条目 |
+| Docker CLI context 配置读取 | `Command` 仅 policy；adapter 不直接读 CLI 配置 | — | 产品 sandbox 中尚未接线 Docker | 是，max 1、10s | 固定 Docker.app binary 与 `desktop-linux`；清除 Docker 连接重定向环境并关闭 CLI hooks；只接受当前 HOME 的 per-user Unix socket。CLI 子进程如何读取其内部配置不由 TreeSnapshot 单独证明 |
+| Docker `context inspect desktop-linux --format json` | `Command` 仅 policy | — | 产品 sandbox 中尚未接线 Docker | 是，max 1、10s | 长度一 JSON array、context 名、endpoint 与 `SkipTLSVerify=false` 全部验证；TCP、SSH、系统 socket 与其他 HOME 早退，后续两条调用为 0 |
+| Docker `--context desktop-linux version --format json` | `Command` 仅 policy | — | 产品 sandbox 中尚未接线 Docker | 是，max 1、15s | 当前只接受 checked-in 的 Desktop/CLI/Engine/API 精确组合；nonzero、未知或畸形输出降级，`system df` 调用为 0 |
+| Docker `--context desktop-linux system df --format json` | `Command` 仅 policy | — | 产品 sandbox 中尚未接线 Docker | 是，max 1、120s | NDJSON 必须恰含四类；string count 转换、human-size、重复/缺失/未知类、负数、溢出、非 UTF-8 与额外 stdout fixtures；timeout/nonzero 无重试 |
+| Docker CLI 诱发 daemon / Resource Saver 状态变化 | — | — | 不覆盖 daemon | 是（只限制调用次数） | **未覆盖 daemon 写**；version 可能唤醒 Resource Saver，system-df 还会遍历 daemon storage；已登记、无自动重试、可由 `SIZETRAIL_NO_DOCKER_PROBE` 关闭 |
 | `/usr/bin/xcode-select -p` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 生产 probe 测试实际执行；只判 selection，标准 CLT → `not_present` |
 | `/usr/bin/xcodebuild -version` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 仅 selection 为完整 Xcode 候选后运行；固定 locale/清除重定向环境；未知版本降级 |
 | `/usr/bin/xcodebuild -checkFirstLaunchStatus` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 仅已验证版本运行；非零为 `not_ready`，绝不调用写入型 `-runFirstLaunch` / `-license accept` |

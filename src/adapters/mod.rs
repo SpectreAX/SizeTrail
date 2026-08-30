@@ -5,6 +5,7 @@ use serde::Serialize;
 use crate::model::{Advice, Finding, FindingSubject, Measurement, SignalObservation};
 use crate::policy::PolicyCtx;
 
+pub mod docker;
 pub mod homebrew;
 mod store;
 pub mod xcode;

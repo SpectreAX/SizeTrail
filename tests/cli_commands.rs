@@ -131,7 +131,7 @@ fn doctor_can_skip_xcode_without_starting_coresimulator() {
             .as_array()
             .expect("registry must be an array")
             .len(),
-        6
+        9
     );
     assert_eq!(
         json["side_effect_policy"][4]["known_side_effects"]

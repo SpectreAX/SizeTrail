@@ -45,6 +45,9 @@ pub const XCODE_FIRST_LAUNCH_STATUS: ProbeId = ProbeId::new("xcode.first_launch_
 pub const XCODE_CORE_SIMULATOR_VERSION: ProbeId = ProbeId::new("xcode.core_simulator_version");
 pub const XCODE_SIMCTL_DEVICES: ProbeId = ProbeId::new("xcode.simctl_devices");
 pub const XCODE_SIMCTL_RUNTIMES: ProbeId = ProbeId::new("xcode.simctl_runtimes");
+pub const DOCKER_CONTEXT_INSPECT: ProbeId = ProbeId::new("docker.context_inspect");
+pub const DOCKER_VERSION: ProbeId = ProbeId::new("docker.version");
+pub const DOCKER_SYSTEM_DF: ProbeId = ProbeId::new("docker.system_df");
 
 const XCODE_PROBE_ENVIRONMENT: &[(&str, &str)] = &[("LANG", "C"), ("LC_ALL", "C")];
 const XCODE_REMOVED_ENVIRONMENT: &[&str] = &[
@@ -60,6 +63,27 @@ const XCODE_REMOVED_ENVIRONMENT: &[&str] = &[
 const SIMCTL_SIDE_EFFECTS: &[&str] = &["simctl_may_start_or_connect_coresimulator_services"];
 const CORE_SIMULATOR_BINARY: &str =
     "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simctl";
+const DOCKER_BINARY: &str = "/Applications/Docker.app/Contents/Resources/bin/docker";
+const DOCKER_PROBE_ENVIRONMENT: &[(&str, &str)] = &[
+    ("DOCKER_CLI_HOOKS", "false"),
+    ("LANG", "C"),
+    ("LC_ALL", "C"),
+];
+const DOCKER_REMOVED_ENVIRONMENT: &[&str] = &[
+    "DOCKER_API_VERSION",
+    "DOCKER_CERT_PATH",
+    "DOCKER_CONFIG",
+    "DOCKER_CONTEXT",
+    "DOCKER_CUSTOM_HEADERS",
+    "DOCKER_HOST",
+    "DOCKER_TLS",
+    "DOCKER_TLS_VERIFY",
+];
+const DOCKER_VERSION_SIDE_EFFECTS: &[&str] = &["docker_may_wake_resource_saver"];
+const DOCKER_SYSTEM_DF_SIDE_EFFECTS: &[&str] = &[
+    "docker_may_wake_resource_saver",
+    "docker_system_df_traverses_daemon_storage",
+];
 
 pub const SIDE_EFFECT_REGISTRY: &[ProbePolicy] = &[
     ProbePolicy {
@@ -142,6 +166,52 @@ pub const SIDE_EFFECT_REGISTRY: &[ProbePolicy] = &[
             environment: XCODE_PROBE_ENVIRONMENT,
             remove_environment: XCODE_REMOVED_ENVIRONMENT,
             timeout_millis: 30_000,
+        },
+    },
+    ProbePolicy {
+        id: DOCKER_CONTEXT_INSPECT,
+        max_calls_per_scan: 1,
+        disable_env: "SIZETRAIL_NO_DOCKER_PROBE",
+        known_side_effects: &["docker_cli_configuration_read"],
+        command: ReadOnlyCommand {
+            program: DOCKER_BINARY,
+            arguments: &["context", "inspect", "desktop-linux", "--format", "json"],
+            environment: DOCKER_PROBE_ENVIRONMENT,
+            remove_environment: DOCKER_REMOVED_ENVIRONMENT,
+            timeout_millis: 10_000,
+        },
+    },
+    ProbePolicy {
+        id: DOCKER_VERSION,
+        max_calls_per_scan: 1,
+        disable_env: "SIZETRAIL_NO_DOCKER_PROBE",
+        known_side_effects: DOCKER_VERSION_SIDE_EFFECTS,
+        command: ReadOnlyCommand {
+            program: DOCKER_BINARY,
+            arguments: &["--context", "desktop-linux", "version", "--format", "json"],
+            environment: DOCKER_PROBE_ENVIRONMENT,
+            remove_environment: DOCKER_REMOVED_ENVIRONMENT,
+            timeout_millis: 15_000,
+        },
+    },
+    ProbePolicy {
+        id: DOCKER_SYSTEM_DF,
+        max_calls_per_scan: 1,
+        disable_env: "SIZETRAIL_NO_DOCKER_PROBE",
+        known_side_effects: DOCKER_SYSTEM_DF_SIDE_EFFECTS,
+        command: ReadOnlyCommand {
+            program: DOCKER_BINARY,
+            arguments: &[
+                "--context",
+                "desktop-linux",
+                "system",
+                "df",
+                "--format",
+                "json",
+            ],
+            environment: DOCKER_PROBE_ENVIRONMENT,
+            remove_environment: DOCKER_REMOVED_ENVIRONMENT,
+            timeout_millis: 120_000,
         },
     },
 ];
@@ -348,8 +418,7 @@ mod tests {
     };
 
     #[test]
-    fn production_registry_is_the_exact_reviewed_xcode_probe_set() {
-        assert_eq!(SIDE_EFFECT_REGISTRY.len(), 6);
+    fn production_registry_starts_with_the_exact_reviewed_xcode_probe_set() {
         assert_eq!(SIDE_EFFECT_REGISTRY[0].id, XCODE_SELECT_DEVELOPER_DIR);
         assert_eq!(SIDE_EFFECT_REGISTRY[0].max_calls_per_scan, 1);
         assert_eq!(
@@ -414,7 +483,7 @@ mod tests {
             SIDE_EFFECT_REGISTRY[5].known_side_effects,
             SIDE_EFFECT_REGISTRY[4].known_side_effects
         );
-        for policy in SIDE_EFFECT_REGISTRY {
+        for policy in &SIDE_EFFECT_REGISTRY[..6] {
             assert_eq!(policy.command.environment, XCODE_PROBE_ENVIRONMENT);
             assert_eq!(policy.command.remove_environment, XCODE_REMOVED_ENVIRONMENT);
             assert!(matches!(policy.command.timeout_millis, 10_000 | 30_000));
@@ -430,6 +499,65 @@ mod tests {
                 "xcrun_nocache",
                 "xcrun_log",
                 "xcrun_verbose",
+            ]
+        );
+    }
+
+    #[test]
+    fn production_registry_appends_the_exact_reviewed_docker_probe_set() {
+        use super::{
+            DOCKER_BINARY, DOCKER_CONTEXT_INSPECT, DOCKER_PROBE_ENVIRONMENT,
+            DOCKER_REMOVED_ENVIRONMENT, DOCKER_SYSTEM_DF, DOCKER_VERSION,
+        };
+
+        assert_eq!(SIDE_EFFECT_REGISTRY.len(), 9);
+        assert_eq!(SIDE_EFFECT_REGISTRY[6].id, DOCKER_CONTEXT_INSPECT);
+        assert_eq!(SIDE_EFFECT_REGISTRY[7].id, DOCKER_VERSION);
+        assert_eq!(SIDE_EFFECT_REGISTRY[8].id, DOCKER_SYSTEM_DF);
+        assert_eq!(
+            SIDE_EFFECT_REGISTRY[6].command.arguments,
+            ["context", "inspect", "desktop-linux", "--format", "json"]
+        );
+        assert_eq!(
+            SIDE_EFFECT_REGISTRY[7].command.arguments,
+            ["--context", "desktop-linux", "version", "--format", "json"]
+        );
+        assert_eq!(
+            SIDE_EFFECT_REGISTRY[8].command.arguments,
+            [
+                "--context",
+                "desktop-linux",
+                "system",
+                "df",
+                "--format",
+                "json"
+            ]
+        );
+        assert_eq!(SIDE_EFFECT_REGISTRY[6].command.timeout_millis, 10_000);
+        assert_eq!(SIDE_EFFECT_REGISTRY[7].command.timeout_millis, 15_000);
+        assert_eq!(SIDE_EFFECT_REGISTRY[8].command.timeout_millis, 120_000);
+        for policy in &SIDE_EFFECT_REGISTRY[6..] {
+            assert_eq!(policy.max_calls_per_scan, 1);
+            assert_eq!(policy.command.program, DOCKER_BINARY);
+            assert_eq!(policy.command.environment, DOCKER_PROBE_ENVIRONMENT);
+            assert_eq!(
+                policy.command.remove_environment,
+                DOCKER_REMOVED_ENVIRONMENT
+            );
+        }
+        assert_eq!(
+            SIDE_EFFECT_REGISTRY[6].known_side_effects,
+            ["docker_cli_configuration_read"]
+        );
+        assert_eq!(
+            SIDE_EFFECT_REGISTRY[7].known_side_effects,
+            ["docker_may_wake_resource_saver"]
+        );
+        assert_eq!(
+            SIDE_EFFECT_REGISTRY[8].known_side_effects,
+            [
+                "docker_may_wake_resource_saver",
+                "docker_system_df_traverses_daemon_storage"
             ]
         );
     }
