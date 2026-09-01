@@ -28,12 +28,17 @@ pub const VERSION: ProbeId = DOCKER_VERSION;
 pub const SYSTEM_DF: ProbeId = DOCKER_SYSTEM_DF;
 
 const VERIFIED_VERSIONS: &[(&str, &str, &str, &str, &str)] = &[(
-    "29.7.2",
-    "1.55",
-    "29.7.2",
-    "1.55",
-    "Docker Desktop 4.88.1 (237512)",
+    "29.4.0",
+    "1.54",
+    "29.4.0",
+    "1.54",
+    "7.0.14-orbstack-00380-ga7e0a2dc9535",
 )];
+pub const DEFAULT_STORE_ROOT: &str = "Library/Group Containers/HUAQ24HBR6.dev.orbstack";
+const DEFAULT_DATA_FOLDER: &str = "Library/Group Containers/HUAQ24HBR6.dev.orbstack/data";
+const VMCONFIG: &str = ".orbstack/vmconfig.json";
+const DISK_RAW: &str = "data.img.raw";
+const DISK_SPARSE: &str = "data.img";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DockerUsageRow {
@@ -127,25 +132,25 @@ impl ToolchainAdapter for DockerAdapter<'_> {
     fn advise(&self, finding: &Finding) -> Vec<Advice> {
         match finding.rule_id.as_str() {
             "docker.images" => vec![Advice::Command(CommandAdvice {
-                display_command: "docker --context desktop-linux image prune".to_owned(),
+                display_command: "docker --context orbstack image prune".to_owned(),
                 impact: AdviceImpact::Destructive,
                 explanation: "This vendor command removes dangling unused images. The vendor does not provide a reliable preview.".to_owned(),
                 reliable_preview_available: false,
             })],
             "docker.build_cache" => vec![Advice::Command(CommandAdvice {
-                display_command: "docker --context desktop-linux builder prune".to_owned(),
+                display_command: "docker --context orbstack builder prune".to_owned(),
                 impact: AdviceImpact::Destructive,
                 explanation: "This vendor command removes unused BuildKit cache that a later build can reconstruct. The vendor does not provide a reliable preview.".to_owned(),
                 reliable_preview_available: false,
             })],
             "docker.containers" => vec![Advice::Command(CommandAdvice {
-                display_command: "docker --context desktop-linux ps -a".to_owned(),
+                display_command: "docker --context orbstack ps -a".to_owned(),
                 impact: AdviceImpact::Inspect,
                 explanation: "Inspect the daemon container list. SizeTrail does not suggest a prune or file-delete command because containers hold writable user state.".to_owned(),
                 reliable_preview_available: true,
             })],
             "docker.volumes" => vec![Advice::Command(CommandAdvice {
-                display_command: "docker --context desktop-linux system prune --volumes".to_owned(),
+                display_command: "docker --context orbstack system prune --volumes".to_owned(),
                 impact: AdviceImpact::Destructive,
                 explanation: "This vendor command deletes stopped containers, unused networks, unused images, unused build cache, and unused anonymous volumes. It is not a recommended one-click next step. The vendor does not provide a reliable preview.".to_owned(),
                 reliable_preview_available: false,
@@ -185,19 +190,10 @@ impl DockerAdapter<'_> {
             return inventory;
         }
 
-        let data = self
-            .home_root
-            .path()
-            .join("Library/Containers/com.docker.docker/Data/vms/0/data");
+        let data = self.home_root.path().join(DEFAULT_DATA_FOLDER);
         match self.home_root.path_exists_without_descending(&data) {
-            Ok(true) => {
-                let before = (inventory.items.len(), inventory.gaps.len());
-                self.measure_candidates(self.home_root, &data, state, &mut inventory);
-                if before == (inventory.items.len(), inventory.gaps.len()) {
-                    self.measure_legacy_driver_image(&mut inventory);
-                }
-            }
-            Ok(false) => self.measure_legacy_driver_image(&mut inventory),
+            Ok(true) => self.measure_candidates(self.home_root, &data, state, &mut inventory),
+            Ok(false) => {}
             Err(error) => {
                 inventory
                     .gaps
@@ -232,13 +228,6 @@ impl DockerAdapter<'_> {
                     }
                 }
                 inventory.items.extend(items);
-                inventory.gaps.push(InventoryGap {
-                    region: "docker.daemon_inventory",
-                    path: None,
-                    reason: InventoryGapReason::DaemonInventoryExcludesInactiveStore,
-                    stage: Some(InventoryStage::DockerSystemDf),
-                    errno: None,
-                });
             }
             Err(reason) => inventory.gaps.push(InventoryGap {
                 region: "docker.daemon_inventory",
@@ -251,38 +240,17 @@ impl DockerAdapter<'_> {
     }
 
     fn configured_data_folder(&self) -> Result<Option<PathBuf>, InventoryGap> {
-        let settings = self
-            .home_root
-            .path()
-            .join("Library/Group Containers/group.com.docker/settings-store.json");
-        if let Some(contents) = self.read_setting(&settings)? {
-            return parse_data_folder(&contents, "DataFolder")
-                .map(Some)
-                .ok_or(InventoryGap {
-                    region: "docker.virtual_disk",
-                    path: Some(settings),
-                    reason: InventoryGapReason::InvalidToolOutput,
-                    stage: Some(InventoryStage::DockerSettings),
-                    errno: None,
-                });
-        }
-
-        let legacy = self
-            .home_root
-            .path()
-            .join("Library/Group Containers/group.com.docker/settings.json");
-        if let Some(contents) = self.read_setting(&legacy)? {
-            return parse_data_folder(&contents, "dataFolder")
-                .map(Some)
-                .ok_or(InventoryGap {
-                    region: "docker.virtual_disk",
-                    path: Some(legacy),
-                    reason: InventoryGapReason::InvalidToolOutput,
-                    stage: Some(InventoryStage::DockerSettings),
-                    errno: None,
-                });
-        }
-        Ok(None)
+        let vmconfig = self.home_root.path().join(VMCONFIG);
+        let Some(contents) = self.read_setting(&vmconfig)? else {
+            return Ok(None);
+        };
+        parse_data_dir(&contents).map_err(|()| InventoryGap {
+            region: "docker.virtual_disk",
+            path: Some(vmconfig),
+            reason: InventoryGapReason::InvalidToolOutput,
+            stage: Some(InventoryStage::DockerSettings),
+            errno: None,
+        })
     }
 
     fn read_setting(&self, path: &Path) -> Result<Option<Vec<u8>>, InventoryGap> {
@@ -327,9 +295,9 @@ impl DockerAdapter<'_> {
         state: &AdapterState,
         inventory: &mut Inventory,
     ) {
-        let raw = data_folder.join("Docker.raw");
-        let qcow2 = data_folder.join("Docker.qcow2");
-        let candidates = [raw, qcow2]
+        let raw = data_folder.join(DISK_RAW);
+        let sparse = data_folder.join(DISK_SPARSE);
+        let candidates = [raw, sparse]
             .into_iter()
             .filter(|path| !excluded(path, self.excludes))
             .filter_map(|path| match root.path_exists_without_descending(&path) {
@@ -363,27 +331,6 @@ impl DockerAdapter<'_> {
         match self.measure_disk(root, selected) {
             Ok(item) => inventory.items.push(item),
             Err(gap) => inventory.gaps.push(gap),
-        }
-    }
-
-    fn measure_legacy_driver_image(&self, inventory: &mut Inventory) {
-        let path = self.home_root.path().join(
-            "Library/Containers/com.docker.docker/Data/com.docker.driver.amd64-linux/Docker.qcow2",
-        );
-        if excluded(&path, self.excludes) {
-            return;
-        }
-        match self.home_root.path_exists_without_descending(&path) {
-            Ok(true) => match self.measure_disk(self.home_root, &path) {
-                Ok(item) => inventory.items.push(item),
-                Err(gap) => inventory.gaps.push(gap),
-            },
-            Ok(false) => {}
-            Err(error) => {
-                inventory
-                    .gaps
-                    .push(io_gap(path, InventoryStage::DockerDiskImage, &error))
-            }
         }
     }
 
@@ -543,14 +490,22 @@ fn daemon_rounded(
     }
 }
 
-fn parse_data_folder(contents: &[u8], key: &str) -> Option<PathBuf> {
-    let document = serde_json::from_slice::<serde_json::Value>(contents).ok()?;
-    let path = PathBuf::from(document.get(key)?.as_str()?);
+fn parse_data_dir(contents: &[u8]) -> Result<Option<PathBuf>, ()> {
+    let document = serde_json::from_slice::<serde_json::Value>(contents).map_err(|_| ())?;
+    let Some(value) = document.get("data_dir") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let path = PathBuf::from(value.as_str().ok_or(())?);
     (path.is_absolute()
         && !path
             .components()
             .any(|component| matches!(component, Component::CurDir | Component::ParentDir)))
     .then_some(path)
+    .map(Some)
+    .ok_or(())
 }
 
 fn root_gap(path: PathBuf, error: RootError) -> InventoryGap {
@@ -670,10 +625,13 @@ fn verified_context(output: &[u8], home: &Path) -> bool {
     else {
         return false;
     };
-    context.name == "desktop-linux"
+    context.name == "orbstack"
         && !context.endpoints.docker.skip_tls_verify
         && context.endpoints.docker.host
-            == format!("unix://{}", home.join(".docker/run/docker.sock").display())
+            == format!(
+                "unix://{}",
+                home.join(".orbstack/run/docker.sock").display()
+            )
 }
 
 #[derive(Deserialize)]
@@ -689,6 +647,8 @@ struct VersionPeer {
     version: String,
     api_version: String,
     #[serde(default)]
+    kernel_version: String,
+    #[serde(default)]
     platform: Option<VersionPlatform>,
 }
 
@@ -700,18 +660,18 @@ struct VersionPlatform {
 
 fn parse_verified_version(output: &[u8]) -> Option<String> {
     let version = serde_json::from_slice::<VersionDocument>(output).ok()?;
-    let platform = version.server.platform?.name;
+    let kernel = version.server.kernel_version.as_str();
     VERIFIED_VERSIONS
         .contains(&(
             version.client.version.as_str(),
             version.client.api_version.as_str(),
             version.server.version.as_str(),
             version.server.api_version.as_str(),
-            platform.as_str(),
+            kernel,
         ))
         .then(|| {
             format!(
-                "client {} api {}; server {} api {}; {platform}",
+                "client {} api {}; server {} api {}; {kernel}",
                 version.client.version,
                 version.client.api_version,
                 version.server.version,
@@ -722,13 +682,18 @@ fn parse_verified_version(output: &[u8]) -> Option<String> {
 
 fn observed_version(output: &[u8]) -> Option<String> {
     let version = serde_json::from_slice::<VersionDocument>(output).ok()?;
+    let kernel = version.server.kernel_version;
+    let marker = if kernel.is_empty() {
+        version.server.platform?.name
+    } else {
+        kernel
+    };
     Some(format!(
-        "client {} api {}; server {} api {}; {}",
+        "client {} api {}; server {} api {}; {marker}",
         version.client.version,
         version.client.api_version,
         version.server.version,
-        version.server.api_version,
-        version.server.platform?.name
+        version.server.api_version
     ))
 }
 
@@ -844,7 +809,7 @@ mod tests {
     use crate::adapters::{AdapterDegradedReason, AdapterState, InventoryGapReason};
     use crate::policy::{PolicyCtx, ProbePolicy, ReadOnlyCommand};
 
-    const CONTEXT: &str = include_str!("../../tests/fixtures/docker/context-desktop-linux.json");
+    const CONTEXT: &str = include_str!("../../tests/fixtures/docker/context-orbstack.json");
     const VERSION_JSON: &str = include_str!("../../tests/fixtures/docker/version-verified.json");
     const SYSTEM_DF_JSON: &str = include_str!("../../tests/fixtures/docker/system-df.ndjson");
 
@@ -902,7 +867,7 @@ mod tests {
     #[test]
     fn remote_context_stops_before_any_daemon_connection() {
         const REMOTE: &str =
-            r#"[{"Name":"desktop-linux","Endpoints":{"docker":{"Host":"ssh://builder.example"}}}]"#;
+            r#"[{"Name":"orbstack","Endpoints":{"docker":{"Host":"ssh://builder.example"}}}]"#;
         const REMOTE_ARGS: &[&str] = &["%s", REMOTE];
         let policies = policies(REMOTE_ARGS, VERSION_ARGS, SYSTEM_DF_ARGS);
         let mut ctx = PolicyCtx::for_test(&policies);
@@ -927,16 +892,43 @@ mod tests {
             ("tcp://127.0.0.1:2375", false),
             ("ssh://builder.example", false),
             ("unix:///var/run/docker.sock", false),
-            ("unix:///Users/other/.docker/run/docker.sock", false),
-            ("unix:///Users/fixture/.docker/run/docker.sock", true),
+            ("unix:///Users/other/.orbstack/run/docker.sock", false),
+            ("unix:///Users/fixture/.orbstack/run/docker.sock", true),
+            ("unix:///Users/fixture/.docker/run/docker.sock", false),
         ] {
             let context = serde_json::to_vec(&serde_json::json!([{
-                "Name": "desktop-linux",
+                "Name": "orbstack",
                 "Endpoints": {"docker": {"Host": host, "SkipTLSVerify": skip_tls_verify}}
             }]))
             .expect("context fixture must serialize");
             assert!(!verified_context(&context, Path::new("/Users/fixture")));
         }
+        assert!(!verified_context(
+            include_str!("../../tests/fixtures/docker/context-desktop-linux.json").as_bytes(),
+            Path::new("/Users/fixture")
+        ));
+        assert!(!verified_context(
+            br#"[{"Name":"desktop-linux","Endpoints":{"docker":{"Host":"unix:///Users/fixture/.orbstack/run/docker.sock","SkipTLSVerify":false}}}]"#,
+            Path::new("/Users/fixture")
+        ));
+    }
+
+    #[test]
+    fn generic_engine_platform_without_kernel_is_unknown() {
+        const GENERIC: &str = r#"{"Client":{"Version":"29.4.0","ApiVersion":"1.54"},"Server":{"Platform":{"Name":"Docker Engine - Community"},"Version":"29.4.0","ApiVersion":"1.54"}}"#;
+        const GENERIC_ARGS: &[&str] = &["%s", GENERIC];
+        let policies = policies(CONTEXT_ARGS, GENERIC_ARGS, SYSTEM_DF_ARGS);
+        let mut ctx = PolicyCtx::for_test(&policies);
+        let state = probe(&mut ctx, Path::new("/Users/fixture"));
+
+        assert!(matches!(
+            state,
+            AdapterState::Degraded {
+                reason: AdapterDegradedReason::UnknownVersion,
+                ..
+            }
+        ));
+        assert_eq!(ctx.count(SYSTEM_DF), 0);
     }
 
     #[test]

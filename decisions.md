@@ -1239,6 +1239,24 @@ Docker probe 闭集为：验证 `desktop-linux` context endpoint、版本门控�
 
 ---
 
+## Q57 — Docker 验证对象改为本机 OrbStack
+
+**决策：生产 Docker probe 闭集与宿主 disk 计量以 OrbStack 为已验证 runtime，不再以 Docker Desktop 为正例。**
+
+本机 2026-09-01 实测：没有 Docker.app；OrbStack 2.2.3 (`CFBundleVersion` 20963) 在跑；CLI 为 `/Applications/OrbStack.app/Contents/MacOS/xbin/docker`（指向同目录 `docker-tools`）；当前 context 为 `orbstack`，endpoint 为 `unix://$HOME/.orbstack/run/docker.sock`；残留的 `desktop-linux` context 仍指向不存在的 `~/.docker/run/docker.sock`。Engine 为 29.4.0 / API 1.54；`Server.Platform.Name` 是通用的 `Docker Engine - Community`，不能单独标识 OrbStack，必须再钉 `Server.KernelVersion`（本机 `7.0.14-orbstack-00380-ga7e0a2dc9535`）。
+
+宿主 backing store 不是 `Docker.raw`。vmgr 打开的是 `~/Library/Group Containers/HUAQ24HBR6.dev.orbstack/data/data.img.raw`；官方 FAQ 还记录同目录下的稀疏 `data.img`。`swap.img` 与 app bundle 内 `rootfs.img` 不是用户 Docker 数据，不得计量。`~/OrbStack` 是运行中的视图挂载，不占空间，不得当存储根。自定义位置只读 `~/.orbstack/vmconfig.json` 的 `data_dir`（经 HOME `Root::measure_object` + dataless），作为独立 Root；不再读 Docker Desktop 的 `settings-store.json`。
+
+probe 仍是三条、每次扫描至多一次、固定参数、清除 Docker 连接重定向环境：inspect `orbstack`、`--context orbstack version --format json`、`--context orbstack system df --format json`。context 仍不是可信名字：必须确认 endpoint 是当前 HOME 的 OrbStack Unix socket。`system df` 可能唤醒暂停的 VM，并遍历 daemon storage。未知版本或 endpoint 不匹配不得阻断宿主 disk 的静态计量。Group Containers 被 TCC 拒绝时记 typed gap，不得把 `not_present` 写成「没有 OrbStack」。
+
+advice 固定 `--context orbstack`，语义与 Q56 相同：永不执行，无 `--force` / `--yes` / 管道。Desktop 的 classic/containerd inactive-store 空格不再作为成功 daemon 报告的固定 gap：本机 OrbStack 没有该双 store 证据。
+
+被否：把 PATH 上的 `/usr/local/bin/docker` 当生产 binary（它是可被替换的符号链接）；把 `desktop-linux` 或 `/var/run/docker.sock` 当 OrbStack 正例；把 `Server.Platform.Name` 单独当版本门；计量 `swap.img`、`rootfs.img` 或 `~/OrbStack`。
+
+影响：Q56 的 Desktop 专有 probe/disk 表述；policy registry、docker adapter、规则 subjects、sandbox fixture、真机验收与 v1.1 notes。`rounded_bytes`、三条 probe 上限、禁止 Engine API 仍按 Q56。
+
+---
+
 ## 附录 A — 实测环境基线
 
 采集于 2026-08-26，作为规则表量级参考与回归基线：

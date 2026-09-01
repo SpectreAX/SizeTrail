@@ -1,5 +1,5 @@
 {
-  "release": "v1.0.0 stable schema",
+  "release": "v1.1.0 OrbStack docker verification",
   "api_baseline": "macOS 13 best effort, not runtime-tested in hosted CI",
   "runtime_lanes": [
     {

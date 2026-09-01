@@ -2,7 +2,7 @@
 
 SizeTrail is a permanently read-only, audit-grade macOS storage attribution reporter for developers.
 
-It explains Xcode, CoreSimulator, Homebrew, and Docker Desktop storage with explicit measurement
+It explains Xcode, CoreSimulator, Homebrew, and OrbStack-hosted Docker storage with explicit measurement
 bases, uncertainty intervals, typed coverage gaps, and evidence-backed advice. It does not delete
 files, execute advice, claim to reproduce Apple’s System Data total, or turn an unreadable region
 into zero bytes.
@@ -15,7 +15,7 @@ JSON signal set is the versioned machine surface.
 - Capacity facts, each carrying its own measurement basis.
 - Xcode build state, archives, DeviceSupport, simulator devices, and registered runtimes.
 - Homebrew caches, logs, Cellar, Caskroom, and taps, without executing `brew`.
-- Docker Desktop host disk images and daemon object sets, without summing those planes.
+- OrbStack host disk images and Docker daemon object sets, without summing those planes.
 - Allocation intervals whose lower bound fails closed when required evidence is absent.
 - Typed reasons for missing coverage, including unknown tool versions and policy-denied paths.
 - Vendor commands or precise report paths as advice; SizeTrail never runs them.
@@ -37,7 +37,7 @@ is a release claim only when that release commit’s CI run is green. The API ba
 separate from hosted runtime evidence.
 
 <!-- BEGIN GENERATED: support-matrix -->
-Release: **v1.0.0 stable schema**
+Release: **v1.1.0 OrbStack docker verification**
 
 API baseline: **macOS 13 best effort, not runtime-tested in hosted CI**
 
@@ -115,8 +115,8 @@ does not modify user or system data.
 Read operations can still have side effects. SizeTrail never executes Xcode’s `simctl` wrapper because
 that wrapper can invoke `xcodebuild -runFirstLaunch`; it calls the fixed CoreSimulator binary only after
 an exact Xcode/CoreSimulator version match. The direct command may still start or connect to Apple’s
-per-user CoreSimulator services. Docker probes use Docker Desktop’s bundled CLI after the
-per-user Unix socket is verified, and may wake Resource Saver. Each external probe is a version-gated
+per-user CoreSimulator services. Docker probes use OrbStack’s bundled CLI after the
+per-user Unix socket is verified, and may wake a paused VM. Each external probe is a version-gated
 registry entry with a hard call limit, timeout, disable switch, and typed list of known side effects.
 `doctor` reports that list plus concrete target capabilities and errno; it does not claim to know a
 global Full Disk Access state.

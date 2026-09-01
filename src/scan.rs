@@ -1,4 +1,4 @@
-use crate::adapters::docker::DockerAdapter;
+use crate::adapters::docker::{DEFAULT_STORE_ROOT, DockerAdapter};
 use crate::adapters::homebrew::{HomebrewAdapter, Layout, discover_layout, open_prefix_root};
 use crate::adapters::xcode::XcodeAdapter;
 use crate::adapters::{AdapterState, InventoryGapReason, ToolchainAdapter};
@@ -350,9 +350,7 @@ pub fn docker_report(
 }
 
 fn docker_exclude_applies(home_root: &Root, path: &std::path::Path) -> bool {
-    let default_root = home_root
-        .path()
-        .join("Library/Containers/com.docker.docker");
+    let default_root = home_root.path().join(DEFAULT_STORE_ROOT);
     path.starts_with(&default_root)
         || DockerAdapter::discover_data_folder(home_root)
             .is_some_and(|folder| path.starts_with(&folder))

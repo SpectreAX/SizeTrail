@@ -263,34 +263,34 @@ fn an_exact_version_mismatch_degrades_without_touching_the_wrapper() {
     }
 }
 
-fn require_real_docker_desktop() {
-    let binary = Path::new("/Applications/Docker.app/Contents/Resources/bin/docker");
+fn require_real_orbstack() {
+    let binary = Path::new("/Applications/OrbStack.app/Contents/MacOS/xbin/docker");
     assert!(
         binary.is_file(),
-        "this lane requires Docker Desktop's bundled CLI; a missing binary is not_present, \
+        "this lane requires OrbStack's bundled CLI; a missing binary is not_present, \
          not a positive real-machine case"
     );
     let home = std::env::var("HOME").expect("HOME must be set");
-    let socket = Path::new(&home).join(".docker/run/docker.sock");
+    let socket = Path::new(&home).join(".orbstack/run/docker.sock");
     assert!(
         socket.exists(),
-        "this lane requires the per-user Docker Desktop Unix socket at {}; hosted runners \
-         without Desktop must not treat not_present as a positive",
+        "this lane requires the per-user OrbStack Unix socket at {}; hosted runners \
+         without OrbStack must not treat not_present as a positive",
         socket.display()
     );
 }
 
 #[test]
-#[ignore = "requires a real Docker Desktop installation; hosted runners without it must not run this"]
-fn real_docker_desktop_is_not_confused_with_not_present() {
-    require_real_docker_desktop();
+#[ignore = "requires a real OrbStack installation; hosted runners without it must not run this"]
+fn real_orbstack_is_not_confused_with_not_present() {
+    require_real_orbstack();
     let output = cargo_bin_cmd!("sizetrail")
         .args(["scan", "--json", "--no-xcode", "--no-homebrew"])
         .output()
         .expect("Docker scan must run");
     assert!(
         matches!(output.status.code(), Some(0 | 3)),
-        "a real Docker Desktop scan must produce a document, got exit {:?}\nstderr:\n{}",
+        "a real OrbStack scan must produce a document, got exit {:?}\nstderr:\n{}",
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -299,7 +299,7 @@ fn real_docker_desktop_is_not_confused_with_not_present() {
     assert_ne!(
         docker,
         "\"not_present\"",
-        "a host with Docker Desktop and its Unix socket must not report the Docker region as \
+        "a host with OrbStack and its Unix socket must not report the Docker region as \
          absent; {}",
         diagnostics(&document)
     );
@@ -317,6 +317,6 @@ fn real_docker_desktop_is_not_confused_with_not_present() {
     let diagnosis: Value = serde_json::from_slice(&doctor.stdout).expect("doctor must emit JSON");
     assert_ne!(
         diagnosis["docker"]["status"], "not_present",
-        "doctor must not treat an installed Docker Desktop as absent: {diagnosis}"
+        "doctor must not treat an installed OrbStack as absent: {diagnosis}"
     );
 }

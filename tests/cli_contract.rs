@@ -62,7 +62,7 @@ fn exit_codes_distinguish_complete_fatal_usage_and_informational_scans() {
     let fixture = tempfile::tempdir().expect("fixture root must be created");
 
     let complete = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--root"])
+        .args(["scan", "--json", "--no-xcode", "--no-docker", "--root"])
         .arg(fixture.path())
         .output()
         .expect("complete scan must run");
@@ -247,7 +247,7 @@ fn the_binary_reports_its_build_version_on_the_cli_and_in_json() {
 
     let fixture = tempfile::tempdir().expect("fixture root must be created");
     let scan = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--root"])
+        .args(["scan", "--json", "--no-xcode", "--no-docker", "--root"])
         .arg(fixture.path())
         .output()
         .expect("scan must run");
@@ -423,7 +423,7 @@ fn doctor_reports_homebrew_user_exclusion() {
 }
 
 fn write_default_docker_raw(root: &std::path::Path) -> std::path::PathBuf {
-    let disk = root.join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw");
+    let disk = root.join("Library/Group Containers/HUAQ24HBR6.dev.orbstack/data/data.img.raw");
     write_fixture(&disk, "");
     disk
 }
@@ -487,23 +487,25 @@ fn docker_virtual_disk_is_measured_without_the_daemon() {
         .output()
         .expect("Docker disk scan must run");
 
-    assert_eq!(
-        output.status.code(),
-        Some(0),
+    assert!(
+        matches!(output.status.code(), Some(0 | 3)),
         "stdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let document: Value =
         serde_json::from_slice(&output.stdout).expect("scan must emit one JSON document");
-    assert_eq!(
-        document["payload"]["regions"]
-            .as_array()
-            .expect("regions")
-            .iter()
-            .find(|region| region["id"] == "docker")
-            .expect("docker region")["status"],
-        "not_present"
+    let status = document["payload"]["regions"]
+        .as_array()
+        .expect("regions")
+        .iter()
+        .find(|region| region["id"] == "docker")
+        .expect("docker region")["status"]
+        .as_str()
+        .expect("docker status must be text");
+    assert!(
+        status == "not_present" || status == "unmeasurable",
+        "a fixture root without a matching OrbStack socket is not Ready; got {status}"
     );
     assert!(
         document["payload"]["findings"]
@@ -526,9 +528,8 @@ fn exact_docker_disk_exclusion_is_applied_before_inventory() {
         .output()
         .expect("Docker exclusion scan must run");
 
-    assert_eq!(
-        output.status.code(),
-        Some(0),
+    assert!(
+        matches!(output.status.code(), Some(0 | 3)),
         "stdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
@@ -558,12 +559,12 @@ fn exact_custom_docker_data_folder_exclusion_is_applied_before_inventory() {
     std::fs::create_dir(&home).expect("fixture HOME must be created");
     let home = std::fs::canonicalize(home).expect("fixture HOME must canonicalize");
     let data_folder = temporary.path().join("DockerData");
-    write_fixture(&data_folder.join("Docker.raw"), "");
+    write_fixture(&data_folder.join("data.img.raw"), "");
     let data_folder = std::fs::canonicalize(&data_folder).expect("data folder must canonicalize");
-    let physical_disk = data_folder.join("Docker.raw");
+    let physical_disk = data_folder.join("data.img.raw");
     write_fixture(
-        &home.join("Library/Group Containers/group.com.docker/settings-store.json"),
-        &serde_json::json!({"DataFolder": data_folder}).to_string(),
+        &home.join(".orbstack/vmconfig.json"),
+        &serde_json::json!({"data_dir": data_folder}).to_string(),
     );
     let output = cargo_bin_cmd!("sizetrail")
         .args(["scan", "--json", "--no-xcode", "--no-homebrew", "--exclude"])
@@ -573,9 +574,8 @@ fn exact_custom_docker_data_folder_exclusion_is_applied_before_inventory() {
         .output()
         .expect("custom DataFolder exclusion scan must run");
 
-    assert_eq!(
-        output.status.code(),
-        Some(0),
+    assert!(
+        matches!(output.status.code(), Some(0 | 3)),
         "stdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)

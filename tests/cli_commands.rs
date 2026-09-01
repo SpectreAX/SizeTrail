@@ -143,7 +143,7 @@ fn explain_from_is_snapshot_only_and_validates_schema_and_id_versions() {
 fn doctor_can_skip_xcode_without_starting_coresimulator() {
     let fixture = tempfile::tempdir().expect("fixture root must be created");
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["doctor", "--json", "--no-xcode", "--root"])
+        .args(["doctor", "--json", "--no-xcode", "--no-docker", "--root"])
         .arg(fixture.path())
         .output()
         .expect("doctor must run");
@@ -171,7 +171,7 @@ fn doctor_can_skip_xcode_without_starting_coresimulator() {
 fn doctor_labels_term_program_as_an_unverified_hint() {
     let fixture = tempfile::tempdir().expect("fixture root must be created");
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["doctor", "--json", "--no-xcode", "--root"])
+        .args(["doctor", "--json", "--no-xcode", "--no-docker", "--root"])
         .arg(fixture.path())
         .env("TERM_PROGRAM", "FixtureTerminal")
         .output()

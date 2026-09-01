@@ -18,14 +18,17 @@ fn default_raw_reports_only_host_backing_file_quantities() {
     let fixture = fixture_home();
     let disk = fixture
         .path
-        .join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw");
+        .join("Library/Group Containers/HUAQ24HBR6.dev.orbstack/data/data.img.raw");
     sparse_file(&disk, 8 * 1024 * 1024);
     let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
     let adapter = DockerAdapter::new(&root, &[]);
     let mut ctx = PolicyCtx::for_scan();
 
     let inventory = adapter.inventory(&mut ctx, &AdapterState::NotPresent);
-    let item = inventory.items.first().expect("default Docker.raw finding");
+    let item = inventory
+        .items
+        .first()
+        .expect("default data.img.raw finding");
     let quantities = item
         .measurements
         .iter()
@@ -35,7 +38,7 @@ fn default_raw_reports_only_host_backing_file_quantities() {
     assert_eq!(item.rule_id, "docker.virtual_disk");
     assert_eq!(
         item.subject.filesystem_path(),
-        Some("~/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw")
+        Some("~/Library/Group Containers/HUAQ24HBR6.dev.orbstack/data/data.img.raw")
     );
     assert_eq!(
         quantities,
@@ -67,7 +70,7 @@ fn default_raw_reports_only_host_backing_file_quantities() {
         matches!(
             findings[0].advice.as_slice(),
             [Advice::Reveal(reveal)]
-            if reveal.normalized_path.ends_with("Docker.raw")
+            if reveal.normalized_path.ends_with("data.img.raw")
                 && reveal.recovery_semantics.contains("safe deletion target")
         ),
         "advice: {:?}",
@@ -82,13 +85,13 @@ fn current_setting_opens_custom_data_folder_as_an_independent_root() {
     let data_folder = temporary.path().join("DockerData");
     std::fs::create_dir(&home).expect("fixture HOME must be created");
     let home = std::fs::canonicalize(home).expect("fixture HOME must canonicalize");
-    let disk = data_folder.join("Docker.raw");
+    let disk = data_folder.join("data.img.raw");
     sparse_file(&disk, 4 * 1024 * 1024);
     let physical_data_folder =
         std::fs::canonicalize(&data_folder).expect("data folder must canonicalize");
-    let physical_disk = physical_data_folder.join("Docker.raw");
-    let settings = home.join("Library/Group Containers/group.com.docker/settings-store.json");
-    write_json(&settings, &serde_json::json!({"DataFolder": data_folder}));
+    let physical_disk = physical_data_folder.join("data.img.raw");
+    let vmconfig = home.join(".orbstack/vmconfig.json");
+    write_json(&vmconfig, &serde_json::json!({"data_dir": data_folder}));
     let root = Root::open(&home).expect("fixture HOME must initialize");
     let adapter = DockerAdapter::new(&root, &[]);
     let mut ctx = PolicyCtx::for_scan();
@@ -104,15 +107,13 @@ fn current_setting_opens_custom_data_folder_as_an_independent_root() {
 }
 
 #[test]
-fn legacy_setting_and_qcow2_remain_measurable() {
+fn custom_data_dir_sparse_image_remains_measurable() {
     let fixture = fixture_home();
-    let data_folder = fixture.path.join("LegacyDockerData");
-    let disk = data_folder.join("Docker.qcow2");
+    let data_folder = fixture.path.join("CustomOrbData");
+    let disk = data_folder.join("data.img");
     sparse_file(&disk, 2 * 1024 * 1024);
-    let settings = fixture
-        .path
-        .join("Library/Group Containers/group.com.docker/settings.json");
-    write_json(&settings, &serde_json::json!({"dataFolder": data_folder}));
+    let vmconfig = fixture.path.join(".orbstack/vmconfig.json");
+    write_json(&vmconfig, &serde_json::json!({"data_dir": data_folder}));
     let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
     let adapter = DockerAdapter::new(&root, &[]);
     let mut ctx = PolicyCtx::for_scan();
@@ -122,19 +123,19 @@ fn legacy_setting_and_qcow2_remain_measurable() {
     assert_eq!(inventory.items.len(), 1);
     assert_eq!(
         inventory.items[0].subject.filesystem_path(),
-        Some("~/LegacyDockerData/Docker.qcow2")
+        Some("~/CustomOrbData/data.img")
     );
 
     let findings = adapter
         .classify(&inventory)
-        .expect("a measured legacy disk must classify");
+        .expect("a measured custom disk must classify");
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].rule_id, "docker.virtual_disk");
     assert!(
         matches!(
             findings[0].advice.as_slice(),
             [Advice::Reveal(reveal)]
-            if reveal.normalized_path.ends_with("Docker.qcow2")
+            if reveal.normalized_path.ends_with("data.img")
                 && reveal.recovery_semantics.contains("safe deletion target")
         ),
         "advice: {:?}",
@@ -147,9 +148,9 @@ fn ambiguous_images_are_never_summed_without_a_verified_version() {
     let fixture = fixture_home();
     let data = fixture
         .path
-        .join("Library/Containers/com.docker.docker/Data/vms/0/data");
-    sparse_file(&data.join("Docker.raw"), 8 * 1024 * 1024);
-    sparse_file(&data.join("Docker.qcow2"), 2 * 1024 * 1024);
+        .join("Library/Group Containers/HUAQ24HBR6.dev.orbstack/data");
+    sparse_file(&data.join("data.img.raw"), 8 * 1024 * 1024);
+    sparse_file(&data.join("data.img"), 2 * 1024 * 1024);
     let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
     let adapter = DockerAdapter::new(&root, &[]);
     let mut ctx = PolicyCtx::for_scan();
@@ -181,37 +182,27 @@ fn ambiguous_images_are_never_summed_without_a_verified_version() {
     assert!(
         disk.subject
             .filesystem_path()
-            .is_some_and(|path| path.ends_with("/Docker.raw"))
+            .is_some_and(|path| path.ends_with("/data.img.raw"))
     );
     assert_eq!(ready_ctx.count(docker::SYSTEM_DF), 1);
 }
 
 #[test]
-fn oldest_driver_layout_is_used_when_the_new_data_directory_is_empty() {
+fn swap_and_unlisted_images_are_never_measured() {
     let fixture = fixture_home();
-    std::fs::create_dir_all(
-        fixture
-            .path
-            .join("Library/Containers/com.docker.docker/Data/vms/0/data"),
-    )
-    .expect("empty modern data folder must be created");
-    let legacy = fixture.path.join(
-        "Library/Containers/com.docker.docker/Data/com.docker.driver.amd64-linux/Docker.qcow2",
-    );
-    sparse_file(&legacy, 2 * 1024 * 1024);
+    let data = fixture
+        .path
+        .join("Library/Group Containers/HUAQ24HBR6.dev.orbstack/data");
+    sparse_file(&data.join("swap.img"), 2 * 1024 * 1024);
+    sparse_file(&data.join("rootfs.img"), 2 * 1024 * 1024);
     let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
     let adapter = DockerAdapter::new(&root, &[]);
     let mut ctx = PolicyCtx::for_scan();
 
     let inventory = adapter.inventory(&mut ctx, &AdapterState::NotPresent);
 
-    assert_eq!(inventory.items.len(), 1);
-    assert_eq!(
-        inventory.items[0].subject.filesystem_path(),
-        Some(
-            "~/Library/Containers/com.docker.docker/Data/com.docker.driver.amd64-linux/Docker.qcow2"
-        )
-    );
+    assert!(inventory.items.is_empty());
+    assert!(inventory.gaps.is_empty());
 }
 
 #[test]
@@ -219,14 +210,12 @@ fn malformed_current_settings_do_not_fall_through_to_a_guessed_default() {
     let fixture = fixture_home();
     let disk = fixture
         .path
-        .join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw");
+        .join("Library/Group Containers/HUAQ24HBR6.dev.orbstack/data/data.img.raw");
     sparse_file(&disk, 8 * 1024 * 1024);
-    let settings = fixture
-        .path
-        .join("Library/Group Containers/group.com.docker/settings-store.json");
-    std::fs::create_dir_all(settings.parent().expect("settings parent"))
-        .expect("settings parent must be created");
-    std::fs::write(&settings, b"not-json").expect("invalid settings fixture must be written");
+    let vmconfig = fixture.path.join(".orbstack/vmconfig.json");
+    std::fs::create_dir_all(vmconfig.parent().expect("vmconfig parent"))
+        .expect("vmconfig parent must be created");
+    std::fs::write(&vmconfig, b"not-json").expect("invalid vmconfig fixture must be written");
     let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
     let adapter = DockerAdapter::new(&root, &[]);
     let mut ctx = PolicyCtx::for_scan();
@@ -242,11 +231,36 @@ fn malformed_current_settings_do_not_fall_through_to_a_guessed_default() {
 }
 
 #[test]
+fn empty_vmconfig_uses_the_default_orbstack_disk() {
+    let fixture = fixture_home();
+    let disk = fixture
+        .path
+        .join("Library/Group Containers/HUAQ24HBR6.dev.orbstack/data/data.img.raw");
+    sparse_file(&disk, 8 * 1024 * 1024);
+    write_json(
+        &fixture.path.join(".orbstack/vmconfig.json"),
+        &serde_json::json!({}),
+    );
+    let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
+    let adapter = DockerAdapter::new(&root, &[]);
+    let mut ctx = PolicyCtx::for_scan();
+
+    let inventory = adapter.inventory(&mut ctx, &AdapterState::NotPresent);
+
+    assert_eq!(inventory.items.len(), 1);
+    assert_eq!(
+        inventory.items[0].subject.filesystem_path(),
+        Some("~/Library/Group Containers/HUAQ24HBR6.dev.orbstack/data/data.img.raw")
+    );
+    assert!(inventory.gaps.is_empty());
+}
+
+#[test]
 fn ready_summary_emits_four_object_sets_without_summing_or_subtracting() {
     let fixture = fixture_home();
     let disk = fixture
         .path
-        .join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw");
+        .join("Library/Group Containers/HUAQ24HBR6.dev.orbstack/data/data.img.raw");
     sparse_file(&disk, 8 * 1024 * 1024);
     let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
     let adapter = DockerAdapter::new(&root, &[]);
@@ -293,7 +307,7 @@ fn ready_summary_emits_four_object_sets_without_summing_or_subtracting() {
         inventory
             .gaps
             .iter()
-            .any(|gap| gap.reason == InventoryGapReason::DaemonInventoryExcludesInactiveStore)
+            .all(|gap| gap.reason != InventoryGapReason::DaemonInventoryExcludesInactiveStore)
     );
     for finding in findings
         .iter()
@@ -341,7 +355,7 @@ fn docker_advice_keeps_host_disk_and_user_state_from_being_treated_as_cleanup() 
     let fixture = fixture_home();
     let disk = fixture
         .path
-        .join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw");
+        .join("Library/Group Containers/HUAQ24HBR6.dev.orbstack/data/data.img.raw");
     sparse_file(&disk, 8 * 1024 * 1024);
     let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
     let adapter = DockerAdapter::new(&root, &[]);
@@ -377,7 +391,7 @@ fn docker_advice_keeps_host_disk_and_user_state_from_being_treated_as_cleanup() 
         matches!(
             disk.advice.as_slice(),
             [Advice::Reveal(reveal)]
-            if reveal.normalized_path.ends_with("Docker.raw")
+            if reveal.normalized_path.ends_with("data.img.raw")
                 && reveal.recovery_semantics.contains("safe deletion target")
         ),
         "disk advice: {:?}",
@@ -391,7 +405,7 @@ fn docker_advice_keeps_host_disk_and_user_state_from_being_treated_as_cleanup() 
     assert!(matches!(
         images.advice.as_slice(),
         [Advice::Command(command)]
-        if command.display_command == "docker --context desktop-linux image prune"
+        if command.display_command == "docker --context orbstack image prune"
             && matches!(command.impact, AdviceImpact::Destructive)
             && !command.reliable_preview_available
             && command.explanation.contains("does not provide a reliable preview")
@@ -404,7 +418,7 @@ fn docker_advice_keeps_host_disk_and_user_state_from_being_treated_as_cleanup() 
     assert!(matches!(
         cache.advice.as_slice(),
         [Advice::Command(command)]
-        if command.display_command == "docker --context desktop-linux builder prune"
+        if command.display_command == "docker --context orbstack builder prune"
             && matches!(command.impact, AdviceImpact::Destructive)
             && !command.reliable_preview_available
     ));
@@ -416,7 +430,7 @@ fn docker_advice_keeps_host_disk_and_user_state_from_being_treated_as_cleanup() 
     assert!(matches!(
         containers.advice.as_slice(),
         [Advice::Command(command)]
-        if command.display_command == "docker --context desktop-linux ps -a"
+        if command.display_command == "docker --context orbstack ps -a"
             && matches!(command.impact, AdviceImpact::Inspect)
             && command.reliable_preview_available
             && command.explanation.contains("does not suggest a prune")
@@ -430,7 +444,7 @@ fn docker_advice_keeps_host_disk_and_user_state_from_being_treated_as_cleanup() 
         matches!(
             volumes.advice.as_slice(),
             [Advice::Command(command)]
-            if command.display_command == "docker --context desktop-linux system prune --volumes"
+            if command.display_command == "docker --context orbstack system prune --volumes"
                 && matches!(command.impact, AdviceImpact::Destructive)
                 && !command.reliable_preview_available
                 && command.explanation.contains("stopped containers")
@@ -457,7 +471,7 @@ fn path_exclude_does_not_drop_daemon_object_sets() {
     let fixture = fixture_home();
     let disk = fixture
         .path
-        .join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw");
+        .join("Library/Group Containers/HUAQ24HBR6.dev.orbstack/data/data.img.raw");
     sparse_file(&disk, 8 * 1024 * 1024);
     let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
     let excludes = [disk];
@@ -499,7 +513,7 @@ fn docker_inventory_fixture_benchmark() {
     let fixture = fixture_home();
     let disk = fixture
         .path
-        .join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw");
+        .join("Library/Group Containers/HUAQ24HBR6.dev.orbstack/data/data.img.raw");
     sparse_file(&disk, 8 * 1024 * 1024);
     let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
     let adapter = DockerAdapter::new(&root, &[]);
@@ -547,7 +561,7 @@ fn not_present_never_runs_system_df() {
     let fixture = fixture_home();
     let disk = fixture
         .path
-        .join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw");
+        .join("Library/Group Containers/HUAQ24HBR6.dev.orbstack/data/data.img.raw");
     sparse_file(&disk, 8 * 1024 * 1024);
     let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
     let adapter = DockerAdapter::new(&root, &[]);
@@ -576,7 +590,7 @@ fn malformed_ready_summary_keeps_the_host_disk_and_does_not_claim_inactive_store
     let fixture = fixture_home();
     let disk = fixture
         .path
-        .join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw");
+        .join("Library/Group Containers/HUAQ24HBR6.dev.orbstack/data/data.img.raw");
     sparse_file(&disk, 8 * 1024 * 1024);
     let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
     let adapter = DockerAdapter::new(&root, &[]);
@@ -606,7 +620,7 @@ fn malformed_ready_summary_keeps_the_host_disk_and_does_not_claim_inactive_store
     );
 }
 
-const CONTEXT: &str = include_str!("fixtures/docker/context-desktop-linux.json");
+const CONTEXT: &str = include_str!("fixtures/docker/context-orbstack.json");
 const VERSION_JSON: &str = include_str!("fixtures/docker/version-verified.json");
 const SYSTEM_DF_JSON: &str = include_str!("fixtures/docker/system-df.ndjson");
 const CONTEXT_ARGS: &[&str] = &["%s", CONTEXT];
