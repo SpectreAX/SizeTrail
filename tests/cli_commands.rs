@@ -21,15 +21,15 @@ fn rules_json_is_the_compiled_toml_rule_set() {
         .expect("rules command must run");
     assert!(output.status.success());
     let rules: Value = serde_json::from_slice(&output.stdout).expect("rules stdout must be JSON");
-    assert_eq!(rules.as_array().expect("rules must be an array").len(), 13);
+    let rules = rules.as_array().expect("rules must be an array");
+    assert_eq!(rules.len(), 14);
     assert!(
         rules
-            .as_array()
-            .expect("rules must be an array")
             .iter()
-            .all(|rule| rule.get("command").is_none()
-                && rule["evidence"].as_str().is_some_and(|v| !v.is_empty()))
+            .any(|rule| rule["id"] == "docker.virtual_disk" && rule["adapter"] == "docker")
     );
+    assert!(rules.iter().all(|rule| rule.get("command").is_none()
+        && rule["evidence"].as_str().is_some_and(|v| !v.is_empty())));
 }
 
 #[test]

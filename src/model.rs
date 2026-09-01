@@ -331,7 +331,7 @@ pub struct Measurement {
     pub value: MeasurementValue,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MeasurementQuantity {
     LogicalSize,
@@ -524,6 +524,7 @@ pub enum CoverageGapReason {
     VolumeSnapshotStateUnavailable,
     CaskArtifactOutsidePrefix,
     UnsupportedPathOverride,
+    AmbiguousDiskImage,
     ExcludedByUser,
 }
 

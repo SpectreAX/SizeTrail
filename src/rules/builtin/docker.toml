@@ -1,0 +1,17 @@
+[[rule]]
+id = "docker.virtual_disk"
+adapter = "docker"
+title = "Docker Desktop virtual disk"
+description = "Host backing file for the Docker Desktop Linux VM."
+subjects = [
+  { kind = "filesystem_path", pattern = "~/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw" },
+  { kind = "filesystem_path", pattern = "~/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.qcow2" },
+  { kind = "filesystem_path", pattern = "~/Library/Containers/com.docker.docker/Data/com.docker.driver.amd64-linux/Docker.qcow2" },
+]
+os = ">=13.0"
+mechanism = "vendor_managed"
+recoverability = "unrecoverable"
+sensitivity = "high"
+evidence = "The file is the VM disk that holds images, containers, and volumes together. Measuring it does not make it a safe deletion target, and SizeTrail never treats the path as reclaimable store cleanup."
+fixture_id = "docker-virtual-disk"
+preconditions = { process_not_running = ["Docker", "com.docker.hyperkit", "com.docker.virtualization"] }

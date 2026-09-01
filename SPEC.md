@@ -824,7 +824,7 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 
 **通道覆盖矩阵是 P2 起的常设交付物。** P2 起每个阶段及阶段内小节完成前都必须基于阶段后代码重新推导矩阵，并为本次新开的通道增加行，不能只沿用上一版结论。P2 至少逐项列出 `fsx/sys.rs` 内每个 `extern` 声明，以及读操作诱发的系统代写；P3 至少逐项列出每个外部命令、子进程与未沙箱化 daemon 的状态变化通道；P4 继续加入每条 `simctl`、规则解析、显式报告文件读取、completion 与新增依赖的运行时通道；P5 逐小节加入 Docker CLI、配置读取、VM metadata 与 daemon IPC。
 
-### 12.1 当前 P5.1 通道覆盖矩阵
+### 12.1 当前 P5.2 通道覆盖矩阵
 
 `静态`包含 crate-root forbid、豁免边界、Clippy 清单锁；`符号锁`包含 extern 精确集合、无直接 `libc`、无 build script、禁止 inline asm/dynamic lookup；`运行时`包含 TreeSnapshot、高价值路径兜底与 deny-write sandbox；`专用`是本行的行为/差分 fixture。`—` 表示该层不覆盖，不能据此扩张安全声明。
 
@@ -862,6 +862,9 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | Docker `--context desktop-linux version --format json` | `Command` 仅 policy | — | 产品 sandbox 中尚未接线 Docker | 是，max 1、15s | 当前只接受 checked-in 的 Desktop/CLI/Engine/API 精确组合；nonzero、未知或畸形输出降级，`system df` 调用为 0 |
 | Docker `--context desktop-linux system df --format json` | `Command` 仅 policy | — | 产品 sandbox 中尚未接线 Docker | 是，max 1、120s | NDJSON 必须恰含四类；string count 转换、human-size、重复/缺失/未知类、负数、溢出、非 UTF-8 与额外 stdout fixtures；timeout/nonzero 无重试 |
 | Docker CLI 诱发 daemon / Resource Saver 状态变化 | — | — | 不覆盖 daemon | 是（只限制调用次数） | **未覆盖 daemon 写**；version 可能唤醒 Resource Saver，system-df 还会遍历 daemon storage；已登记、无自动重试、可由 `SIZETRAIL_NO_DOCKER_PROBE` 关闭 |
+| Docker Desktop settings 读取 | safe read 只在 HOME `Root::measure_object` 与 dataless 检查后执行 | `getattrlist` 精确符号集 | P5.2 fixture；产品 sandbox 尚未接线 Docker | — | current `settings-store.json/DataFolder` 与 legacy `settings.json/dataFolder` 分开锁定；值只接受规范化绝对目录。当前文件畸形时不回退猜默认路径 |
+| Docker 自定义 DataFolder 独立 `Root` | safe 路径解析后只走 `Root` API | 与 HOME Root 相同的 FFI 精确集合 | HOME 外 DataFolder fixture；产品 sandbox 尚未接线 Docker | — | external fixture 证明不借 HOME Root 越界；Root 初始化失败只形成 typed gap，不与 HOME 或 daemon 数字求和 |
+| Docker.raw / Docker.qcow2 metadata | safe `symlink_metadata`；永不打开 image 内容 | `getattrlist` 精确符号集 | sparse/default/custom/two-generation legacy/ambiguous fixtures；产品 sandbox 尚未接线 Docker | — | 只产生 logical limit 与 host allocated footprint；dataless/非普通文件拒绝；raw+qcow2 未获 verified-version 唯一选择时 typed ambiguous，绝无 disposition interval |
 | `/usr/bin/xcode-select -p` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 生产 probe 测试实际执行；只判 selection，标准 CLT → `not_present` |
 | `/usr/bin/xcodebuild -version` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 仅 selection 为完整 Xcode 候选后运行；固定 locale/清除重定向环境；未知版本降级 |
 | `/usr/bin/xcodebuild -checkFirstLaunchStatus` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 仅已验证版本运行；非零为 `not_ready`，绝不调用写入型 `-runFirstLaunch` / `-license accept` |
@@ -1068,7 +1071,8 @@ prefix 位于 HOME 之外，因此需要**为 prefix 单独 `Root::open`**。若
 
 - 当前 `~/Library/Group Containers/group.com.docker/settings-store.json` 的 `DataFolder`；
 - Docker Desktop 4.34 及更早 `settings.json` 的 `dataFolder`；
-- legacy `Docker.qcow2`。
+- data-folder 内的 legacy `Docker.qcow2`，以及更早的
+  `~/Library/Containers/com.docker.docker/Data/com.docker.driver.amd64-linux/Docker.qcow2`。
 
 设置文件先经 HOME `Root::measure_object` 与 dataless gate，再读取内容。自定义 DataFolder
 为独立 `Root`；finding 单独报告，绝不与 HOME Root 或 daemon category 求和。raw 与 qcow2

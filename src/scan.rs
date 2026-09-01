@@ -315,7 +315,8 @@ const fn coverage_gap_status(reason: InventoryGapReason) -> RegionStatus {
         | InventoryGapReason::RuntimeSizeUnavailable
         | InventoryGapReason::TimedOut
         | InventoryGapReason::RuleSetInvalid
-        | InventoryGapReason::VolumeSnapshotStateUnavailable => RegionStatus::Unmeasurable,
+        | InventoryGapReason::VolumeSnapshotStateUnavailable
+        | InventoryGapReason::AmbiguousDiskImage => RegionStatus::Unmeasurable,
     }
 }
 
@@ -346,6 +347,7 @@ const fn coverage_reason(reason: InventoryGapReason) -> CoverageGapReason {
             CoverageGapReason::CaskArtifactOutsidePrefix
         }
         InventoryGapReason::UnsupportedPathOverride => CoverageGapReason::UnsupportedPathOverride,
+        InventoryGapReason::AmbiguousDiskImage => CoverageGapReason::AmbiguousDiskImage,
     }
 }
 
@@ -368,6 +370,7 @@ const fn gap_reason_id(reason: InventoryGapReason) -> &'static str {
         InventoryGapReason::VolumeSnapshotStateUnavailable => "volume_snapshot_state_unavailable",
         InventoryGapReason::CaskArtifactOutsidePrefix => "cask_artifact_outside_prefix",
         InventoryGapReason::UnsupportedPathOverride => "unsupported_path_override",
+        InventoryGapReason::AmbiguousDiskImage => "ambiguous_disk_image",
     }
 }
 

@@ -1,13 +1,27 @@
 use std::collections::BTreeMap;
+use std::io;
+use std::path::Component;
 use std::path::Path;
+use std::path::PathBuf;
 
 use serde::Deserialize;
 
-use crate::adapters::{AdapterDegradedReason, AdapterState, InventoryGapReason};
-use crate::model::rounded_bytes;
+use crate::adapters::store::{excluded, object_observations};
+use crate::adapters::{
+    AdapterDegradedReason, AdapterId, AdapterState, Inventory, InventoryGap, InventoryGapReason,
+    InventoryIdentity, InventoryItem, InventoryStage, ToolchainAdapter,
+};
+use crate::fsx::{Root, RootError};
+use crate::model::{
+    Advice, Finding, FindingSubject, Measurement, MeasurementBasis, MeasurementCoverage,
+    MeasurementCoverageStatus, MeasurementPlane, MeasurementQuantity, MeasurementScope,
+    MeasurementScopeKind, MeasurementValue, RevealAdvice, finding_id, normalize_findings,
+    normalized_report_path, rounded_bytes,
+};
 use crate::policy::{
     DOCKER_CONTEXT_INSPECT, DOCKER_SYSTEM_DF, DOCKER_VERSION, PolicyCtx, PolicyError, ProbeId,
 };
+use crate::rules::builtin_rules;
 
 pub const CONTEXT_INSPECT: ProbeId = DOCKER_CONTEXT_INSPECT;
 pub const VERSION: ProbeId = DOCKER_VERSION;
@@ -28,6 +42,388 @@ pub struct DockerUsageRow {
     pub active_count: u64,
     pub size: String,
     pub reclaimable: String,
+}
+
+pub struct DockerAdapter<'a> {
+    home_root: &'a Root,
+    excludes: &'a [PathBuf],
+}
+
+impl<'a> DockerAdapter<'a> {
+    #[must_use]
+    pub const fn new(home_root: &'a Root, excludes: &'a [PathBuf]) -> Self {
+        Self {
+            home_root,
+            excludes,
+        }
+    }
+}
+
+impl ToolchainAdapter for DockerAdapter<'_> {
+    fn id(&self) -> AdapterId {
+        AdapterId::new("docker")
+    }
+
+    fn probe(&self, ctx: &mut PolicyCtx<'_>) -> AdapterState {
+        probe(ctx, self.home_root.path())
+    }
+
+    fn inventory(&self, _ctx: &mut PolicyCtx<'_>, state: &AdapterState) -> Inventory {
+        self.disk_inventory(state)
+    }
+
+    fn classify(&self, inventory: &Inventory) -> Result<Vec<Finding>, InventoryGapReason> {
+        let rules = builtin_rules().map_err(|_| InventoryGapReason::RuleSetInvalid)?;
+        let rules = rules
+            .into_iter()
+            .filter(|rule| rule.adapter == "docker")
+            .map(|rule| (rule.id.clone(), rule))
+            .collect::<BTreeMap<_, _>>();
+        let mut findings = Vec::with_capacity(inventory.items.len());
+        for item in &inventory.items {
+            let rule = rules
+                .get(&item.rule_id)
+                .ok_or(InventoryGapReason::RuleSetInvalid)?;
+            let subject_key = item
+                .subject
+                .canonical_key()
+                .map_err(|_| InventoryGapReason::RuleSetInvalid)?;
+            let mut finding = Finding {
+                id: finding_id("docker", &item.rule_id, &subject_key)
+                    .map_err(|_| InventoryGapReason::RuleSetInvalid)?,
+                adapter_id: "docker".to_owned(),
+                rule_id: item.rule_id.clone(),
+                title: rule.title.clone(),
+                summary: String::new(),
+                subject: item.subject.clone(),
+                mechanism: rule.mechanism.as_str().to_owned(),
+                recoverability: rule.recoverability.as_str().to_owned(),
+                sensitivity: rule.sensitivity.as_str().to_owned(),
+                evidence: rule.evidence.clone(),
+                unexplained_private_gap: true,
+                measurements: item.measurements.clone(),
+                observations: item.observations.clone(),
+                advice: Vec::new(),
+            };
+            finding.advice = self.advise(&finding);
+            findings.push(finding);
+        }
+        normalize_findings(&mut findings);
+        Ok(findings)
+    }
+
+    fn advise(&self, finding: &Finding) -> Vec<Advice> {
+        finding
+            .subject
+            .filesystem_path()
+            .map_or_else(Vec::new, |path| {
+                vec![Advice::Reveal(RevealAdvice {
+                    normalized_path: path.to_owned(),
+                    recovery_semantics: "This host VM disk is not a safe deletion target. Deleting it destroys images, containers, and volumes together. SizeTrail only reveals the path.".to_owned(),
+                })]
+            })
+    }
+}
+
+impl DockerAdapter<'_> {
+    fn disk_inventory(&self, state: &AdapterState) -> Inventory {
+        let mut inventory = Inventory::default();
+        let configured = match self.configured_data_folder() {
+            Ok(configured) => configured,
+            Err(gap) => {
+                inventory.gaps.push(gap);
+                return inventory;
+            }
+        };
+
+        if let Some(folder) = configured {
+            if excluded(&folder, self.excludes) {
+                return inventory;
+            }
+            match Root::open(&folder) {
+                Ok(root) => self.measure_candidates(&root, root.path(), state, &mut inventory),
+                Err(error) => inventory.gaps.push(root_gap(folder, error)),
+            }
+            return inventory;
+        }
+
+        let data = self
+            .home_root
+            .path()
+            .join("Library/Containers/com.docker.docker/Data/vms/0/data");
+        match self.home_root.path_exists_without_descending(&data) {
+            Ok(true) => {
+                let before = (inventory.items.len(), inventory.gaps.len());
+                self.measure_candidates(self.home_root, &data, state, &mut inventory);
+                if before == (inventory.items.len(), inventory.gaps.len()) {
+                    self.measure_legacy_driver_image(&mut inventory);
+                }
+            }
+            Ok(false) => self.measure_legacy_driver_image(&mut inventory),
+            Err(error) => {
+                inventory
+                    .gaps
+                    .push(io_gap(data, InventoryStage::DockerDiskImage, &error))
+            }
+        }
+        inventory
+    }
+
+    fn configured_data_folder(&self) -> Result<Option<PathBuf>, InventoryGap> {
+        let settings = self
+            .home_root
+            .path()
+            .join("Library/Group Containers/group.com.docker/settings-store.json");
+        if let Some(contents) = self.read_setting(&settings)? {
+            return parse_data_folder(&contents, "DataFolder")
+                .map(Some)
+                .ok_or(InventoryGap {
+                    region: "docker.virtual_disk",
+                    path: Some(settings),
+                    reason: InventoryGapReason::InvalidToolOutput,
+                    stage: Some(InventoryStage::DockerSettings),
+                    errno: None,
+                });
+        }
+
+        let legacy = self
+            .home_root
+            .path()
+            .join("Library/Group Containers/group.com.docker/settings.json");
+        if let Some(contents) = self.read_setting(&legacy)? {
+            return parse_data_folder(&contents, "dataFolder")
+                .map(Some)
+                .ok_or(InventoryGap {
+                    region: "docker.virtual_disk",
+                    path: Some(legacy),
+                    reason: InventoryGapReason::InvalidToolOutput,
+                    stage: Some(InventoryStage::DockerSettings),
+                    errno: None,
+                });
+        }
+        Ok(None)
+    }
+
+    fn read_setting(&self, path: &Path) -> Result<Option<Vec<u8>>, InventoryGap> {
+        if excluded(path, self.excludes) {
+            return Ok(None);
+        }
+        match self.home_root.path_exists_without_descending(path) {
+            Ok(false) => return Ok(None),
+            Ok(true) => {}
+            Err(error) => {
+                return Err(io_gap(
+                    path.to_path_buf(),
+                    InventoryStage::DockerSettings,
+                    &error,
+                ));
+            }
+        }
+        let measured = self
+            .home_root
+            .measure_object(path)
+            .map_err(|error| io_gap(path.to_path_buf(), InventoryStage::DockerSettings, &error))?;
+        if measured.dataless
+            || !std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+        {
+            return Err(InventoryGap {
+                region: "docker.virtual_disk",
+                path: Some(path.to_path_buf()),
+                reason: InventoryGapReason::PolicyDeniedUnknown,
+                stage: Some(InventoryStage::DockerSettings),
+                errno: None,
+            });
+        }
+        std::fs::read(path)
+            .map(Some)
+            .map_err(|error| io_gap(path.to_path_buf(), InventoryStage::DockerSettings, &error))
+    }
+
+    fn measure_candidates(
+        &self,
+        root: &Root,
+        data_folder: &Path,
+        state: &AdapterState,
+        inventory: &mut Inventory,
+    ) {
+        let raw = data_folder.join("Docker.raw");
+        let qcow2 = data_folder.join("Docker.qcow2");
+        let candidates = [raw, qcow2]
+            .into_iter()
+            .filter(|path| !excluded(path, self.excludes))
+            .filter_map(|path| match root.path_exists_without_descending(&path) {
+                Ok(true) => Some(Ok(path)),
+                Ok(false) => None,
+                Err(error) => Some(Err(io_gap(path, InventoryStage::DockerDiskImage, &error))),
+            })
+            .collect::<Result<Vec<_>, _>>();
+        let candidates = match candidates {
+            Ok(candidates) => candidates,
+            Err(gap) => {
+                inventory.gaps.push(gap);
+                return;
+            }
+        };
+        let selected = match candidates.as_slice() {
+            [] => return,
+            [only] => only,
+            [raw, _] if matches!(state, AdapterState::Ready { .. }) => raw,
+            _ => {
+                inventory.gaps.push(InventoryGap {
+                    region: "docker.virtual_disk",
+                    path: Some(data_folder.to_path_buf()),
+                    reason: InventoryGapReason::AmbiguousDiskImage,
+                    stage: Some(InventoryStage::DockerDiskImage),
+                    errno: None,
+                });
+                return;
+            }
+        };
+        match self.measure_disk(root, selected) {
+            Ok(item) => inventory.items.push(item),
+            Err(gap) => inventory.gaps.push(gap),
+        }
+    }
+
+    fn measure_legacy_driver_image(&self, inventory: &mut Inventory) {
+        let path = self.home_root.path().join(
+            "Library/Containers/com.docker.docker/Data/com.docker.driver.amd64-linux/Docker.qcow2",
+        );
+        if excluded(&path, self.excludes) {
+            return;
+        }
+        match self.home_root.path_exists_without_descending(&path) {
+            Ok(true) => match self.measure_disk(self.home_root, &path) {
+                Ok(item) => inventory.items.push(item),
+                Err(gap) => inventory.gaps.push(gap),
+            },
+            Ok(false) => {}
+            Err(error) => {
+                inventory
+                    .gaps
+                    .push(io_gap(path, InventoryStage::DockerDiskImage, &error))
+            }
+        }
+    }
+
+    fn measure_disk(&self, root: &Root, path: &Path) -> Result<InventoryItem, InventoryGap> {
+        let measured = root
+            .measure_object(path)
+            .map_err(|error| io_gap(path.to_path_buf(), InventoryStage::DockerDiskImage, &error))?;
+        if measured.dataless
+            || !std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+        {
+            return Err(InventoryGap {
+                region: "docker.virtual_disk",
+                path: Some(path.to_path_buf()),
+                reason: InventoryGapReason::PolicyDeniedUnknown,
+                stage: Some(InventoryStage::DockerDiskImage),
+                errno: None,
+            });
+        }
+        let normalized_path =
+            normalized_report_path(self.home_root.path(), path).map_err(|_| InventoryGap {
+                region: "docker.virtual_disk",
+                path: Some(path.to_path_buf()),
+                reason: InventoryGapReason::TraversalFailed,
+                stage: Some(InventoryStage::DockerDiskImage),
+                errno: None,
+            })?;
+        let scope = MeasurementScope {
+            kind: MeasurementScopeKind::ToolchainStore,
+            id: normalized_path.clone(),
+        };
+        let complete = MeasurementCoverage {
+            status: MeasurementCoverageStatus::Complete,
+            gap_ids: Vec::new(),
+        };
+        let allocated = measured.allocated_bytes;
+        Ok(InventoryItem {
+            rule_id: "docker.virtual_disk".to_owned(),
+            subject: FindingSubject::FilesystemPath { normalized_path },
+            path: Some(path.to_path_buf()),
+            measurements: vec![
+                Measurement {
+                    plane: MeasurementPlane::ToolchainAttribution,
+                    quantity: MeasurementQuantity::DiskImageLogicalLimit,
+                    basis: MeasurementBasis::LogicalSize,
+                    scope: scope.clone(),
+                    coverage: complete,
+                    value: MeasurementValue::ExactBytes {
+                        bytes: measured.logical_bytes,
+                    },
+                },
+                Measurement {
+                    plane: MeasurementPlane::ToolchainAttribution,
+                    quantity: MeasurementQuantity::HostAllocatedFootprint,
+                    basis: MeasurementBasis::AllocatedFootprint,
+                    scope,
+                    coverage: MeasurementCoverage {
+                        status: if allocated.is_some() {
+                            MeasurementCoverageStatus::Complete
+                        } else {
+                            MeasurementCoverageStatus::Unmeasurable
+                        },
+                        gap_ids: if allocated.is_some() {
+                            Vec::new()
+                        } else {
+                            vec!["allocated_size_unmeasurable".to_owned()]
+                        },
+                    },
+                    value: allocated.map_or(MeasurementValue::Unmeasurable, |bytes| {
+                        MeasurementValue::ExactBytes { bytes }
+                    }),
+                },
+            ],
+            observations: object_observations(&measured),
+            identity: InventoryIdentity::Path,
+        })
+    }
+}
+
+fn parse_data_folder(contents: &[u8], key: &str) -> Option<PathBuf> {
+    let document = serde_json::from_slice::<serde_json::Value>(contents).ok()?;
+    let path = PathBuf::from(document.get(key)?.as_str()?);
+    (path.is_absolute()
+        && !path
+            .components()
+            .any(|component| matches!(component, Component::CurDir | Component::ParentDir)))
+    .then_some(path)
+}
+
+fn root_gap(path: PathBuf, error: RootError) -> InventoryGap {
+    InventoryGap {
+        region: "docker.virtual_disk",
+        path: Some(path),
+        reason: match error {
+            RootError::CloudRootExcluded | RootError::ReadPolicyVerificationFailed => {
+                InventoryGapReason::PolicyDeniedUnknown
+            }
+            RootError::PathUnresolvable => InventoryGapReason::AbsentOrChanged,
+            RootError::NotNormalizedAbsolute
+            | RootError::PathNotEncodable
+            | RootError::IdentityUnavailable
+            | RootError::SymlinkTraversalRejected => InventoryGapReason::TraversalFailed,
+        },
+        stage: Some(InventoryStage::RootInitialization),
+        errno: None,
+    }
+}
+
+fn io_gap(path: PathBuf, stage: InventoryStage, error: &io::Error) -> InventoryGap {
+    let errno = error.raw_os_error();
+    InventoryGap {
+        region: "docker.virtual_disk",
+        path: Some(path),
+        reason: match errno {
+            Some(2) => InventoryGapReason::AbsentOrChanged,
+            Some(13) => InventoryGapReason::AccessDenied,
+            Some(1) => InventoryGapReason::PolicyDeniedUnknown,
+            _ => InventoryGapReason::TraversalFailed,
+        },
+        stage: Some(stage),
+        errno,
+    }
 }
 
 pub fn probe(ctx: &mut PolicyCtx<'_>, home: &Path) -> AdapterState {

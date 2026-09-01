@@ -116,6 +116,7 @@ pub enum InventoryGapReason {
     VolumeSnapshotStateUnavailable,
     CaskArtifactOutsidePrefix,
     UnsupportedPathOverride,
+    AmbiguousDiskImage,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -130,6 +131,8 @@ pub enum InventoryStage {
     RuleEvaluation,
     ToolchainProbe,
     VolumeSnapshots,
+    DockerSettings,
+    DockerDiskImage,
 }
 
 impl InventoryStage {
@@ -145,6 +148,8 @@ impl InventoryStage {
             Self::RuleEvaluation => "rule_evaluation",
             Self::ToolchainProbe => "toolchain_probe",
             Self::VolumeSnapshots => "volume_snapshots",
+            Self::DockerSettings => "docker_settings",
+            Self::DockerDiskImage => "docker_disk_image",
         }
     }
 }

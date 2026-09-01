@@ -218,7 +218,7 @@ pub(crate) fn measure_store_as(
     ))
 }
 
-fn object_observations(measured: &ObjectMeasurements) -> Vec<SignalObservation> {
+pub(crate) fn object_observations(measured: &ObjectMeasurements) -> Vec<SignalObservation> {
     let mut observations = Vec::new();
     let extended = measured.extended_flags.unwrap_or_default();
     if extended & 0x0000_0001 != 0 {
@@ -279,6 +279,6 @@ const fn observation(
     }
 }
 
-fn excluded(path: &Path, excludes: &[PathBuf]) -> bool {
+pub(crate) fn excluded(path: &Path, excludes: &[PathBuf]) -> bool {
     excludes.iter().any(|excluded| path.starts_with(excluded))
 }
