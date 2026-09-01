@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::fsx::CapacityValue;
 
-pub const SCHEMA_VERSION: &str = "0.1.0-unstable";
+pub const SCHEMA_VERSION: &str = "1.0.0";
 pub const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const FINDING_ID_VERSION: &str = "f1";
 

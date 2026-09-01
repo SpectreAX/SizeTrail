@@ -58,7 +58,9 @@ jobs:
           (cd dist && shasum -a 256 sizetrail-*.tar.gz > SHA256SUMS)
 
       - name: Record release benchmark
-        run: bash scripts/benchmark-xcode-fixture.sh
+        run: |
+          bash scripts/benchmark-xcode-fixture.sh
+          bash scripts/benchmark-docker-fixture.sh
 
       # Notes are published from a repository file so that the claim and quantitative-documentation
       # gates can actually read them. Auto-generated notes live only on GitHub and are therefore
@@ -71,6 +73,8 @@ jobs:
           notes="docs/release-notes/${RELEASE_TAG}.md"
           test -f "$notes"
           gh release create "$RELEASE_TAG" \
-            dist/*.tar.gz dist/SHA256SUMS artifacts/xcode-fixture-benchmark.json \
+            dist/*.tar.gz dist/SHA256SUMS \
+            artifacts/xcode-fixture-benchmark.json \
+            artifacts/docker-fixture-benchmark.json \
             --verify-tag --notes-file "$notes" \
-            --title "SizeTrail ${RELEASE_TAG} technical preview"
+            --title "SizeTrail ${RELEASE_TAG}"

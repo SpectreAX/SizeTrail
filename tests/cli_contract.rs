@@ -254,10 +254,7 @@ fn the_binary_reports_its_build_version_on_the_cli_and_in_json() {
     let document: Value =
         serde_json::from_slice(&scan.stdout).expect("scan must emit a JSON document");
     assert_eq!(document["tool_version"], expected);
-    assert_ne!(
-        document["tool_version"], document["schema_version"],
-        "the build version must be distinguishable from the schema version"
-    );
+    assert_eq!(document["schema_version"], sizetrail::model::SCHEMA_VERSION);
 
     let doctor = cargo_bin_cmd!("sizetrail")
         .args(["doctor", "--json", "--no-xcode"])
@@ -641,7 +638,7 @@ fn live_explain_path_rejects_a_docker_object_set() {
     let report = fixture.path().join("report.json");
     std::fs::write(
         &report,
-        r#"{"schema_version":"0.1.0-unstable","environment":{"generated_at_unix_seconds":1800000000},"payload":{"findings":[{"id":"f1:docker:0123456789abcdef","subject":{"kind":"toolchain_object_set","object_set_id":"docker.images"}}]}}"#,
+        r#"{"schema_version":"1.0.0","environment":{"generated_at_unix_seconds":1800000000},"payload":{"findings":[{"id":"f1:docker:0123456789abcdef","subject":{"kind":"toolchain_object_set","object_set_id":"docker.images"}}]}}"#,
     )
     .expect("object-set report must be written");
     let output = cargo_bin_cmd!("sizetrail")

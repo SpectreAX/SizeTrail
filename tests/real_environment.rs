@@ -134,7 +134,7 @@ fn real_xcode_storage_produces_structurally_valid_findings() {
     let document = scan_real_home();
 
     assert_eq!(
-        document["schema_version"], "0.1.0-unstable",
+        document["schema_version"], "1.0.0",
         "developer_dir={developer_dir}"
     );
     let xcode = region_status(&document, "xcode");

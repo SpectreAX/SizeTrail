@@ -7,6 +7,8 @@ import sys
 FRAGMENTS = {
     "support-matrix": Path("docs/generated/support-matrix.md"),
     "fixture-report": Path("docs/generated/fixture-report.md"),
+    "measurement-basis": Path("docs/generated/measurement-basis.md"),
+    "coverage-unknown-baseline": Path("docs/generated/coverage-unknown-baseline.md"),
 }
 
 

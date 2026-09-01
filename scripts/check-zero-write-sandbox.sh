@@ -163,7 +163,7 @@ establish_observer "$start_marker" "$probe_root/home/.sizetrail-mutation"
 
 run_product scan scan --json --root "$probe_root/home"
 require_status scan 0 3
-require_output scan '"schema_version":"0.1.0-unstable"'
+require_output scan '"schema_version":"1.0.0"'
 require_output scan '"id":"capacity","status":"complete"'
 require_output scan '"rule_id":"docker.virtual_disk"'
 

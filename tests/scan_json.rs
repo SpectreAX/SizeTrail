@@ -22,7 +22,7 @@ fn explicitly_excluded_adapter_scan_emits_a_complete_json_document() {
     assert_eq!(output.status.code(), Some(0));
     let document: Value = serde_json::from_slice(&output.stdout).expect("stdout must be JSON");
 
-    assert_eq!(document["schema_version"], "0.1.0-unstable");
+    assert_eq!(document["schema_version"], "1.0.0");
     assert!(document["environment"].is_object());
     assert!(document["payload"].is_object());
     assert_eq!(document["payload"]["regions"][0]["id"], "capacity");

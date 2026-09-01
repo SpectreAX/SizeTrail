@@ -420,8 +420,20 @@ fn quantitative_document_gate_rejects_a_forged_generated_fragment() {
     )
     .expect("report fragment must be written");
     fs::write(
+        fixture.path().join("docs/generated/measurement-basis.md"),
+        "verified basis\n",
+    )
+    .expect("basis fragment must be written");
+    fs::write(
+        fixture
+            .path()
+            .join("docs/generated/coverage-unknown-baseline.md"),
+        "verified baseline\n",
+    )
+    .expect("baseline fragment must be written");
+    fs::write(
         fixture.path().join("README.md"),
-        "<!-- BEGIN GENERATED: support-matrix -->\nforged 87 GB\n<!-- END GENERATED: support-matrix -->\n<!-- BEGIN GENERATED: fixture-report -->\nverified fixture\n<!-- END GENERATED: fixture-report -->\n",
+        "<!-- BEGIN GENERATED: support-matrix -->\nforged 87 GB\n<!-- END GENERATED: support-matrix -->\n<!-- BEGIN GENERATED: fixture-report -->\nverified fixture\n<!-- END GENERATED: fixture-report -->\n<!-- BEGIN GENERATED: measurement-basis -->\nverified basis\n<!-- END GENERATED: measurement-basis -->\n<!-- BEGIN GENERATED: coverage-unknown-baseline -->\nverified baseline\n<!-- END GENERATED: coverage-unknown-baseline -->\n",
     )
     .expect("forged README must be written");
 
@@ -523,7 +535,8 @@ fn minimum_macos_gate_rejects_newer_deployment_target() {
 /// A document that satisfies every `scan` assertion, so a negative fixture built on it can only be
 /// rejected for the one property under test. `scan` is the first command the gate observes, so a
 /// fixture meant to be rejected never reaches the later subcommands.
-const COMPLETE_ENOUGH_DOCUMENT: &str = r#"{"schema_version":"0.1.0-unstable","payload":{"regions":[{"id":"capacity","status":"complete"}]}}"#;
+const COMPLETE_ENOUGH_DOCUMENT: &str =
+    r#"{"schema_version":"1.0.0","payload":{"regions":[{"id":"capacity","status":"complete"}]}}"#;
 
 /// A stand-in for the whole CLI surface, needed by fixtures that must pass the gate rather than be
 /// rejected by it: the sandbox observes every advertised subcommand, so a fake that answers only
@@ -545,7 +558,7 @@ int main(int argc, char **argv) {
     const char *command = argc > 1 ? argv[1] : "";
 
     if (strcmp(command, "scan") == 0) {
-        puts("{\"schema_version\":\"0.1.0-unstable\",\"payload\":"
+        puts("{\"schema_version\":\"1.0.0\",\"payload\":"
              "{\"regions\":[{\"id\":\"capacity\",\"status\":\"complete\"}],"
              "\"findings\":[{\"rule_id\":\"docker.virtual_disk\"}]}}");
         return 0;
@@ -620,7 +633,7 @@ fn sandbox_gate_rejects_a_scan_that_measured_nothing() {
     let fake_binary = write_fake_binary(
         fixture.path(),
         "sizetrail-idle",
-        "#!/bin/sh\nprintf '%s\\n' '{\"schema_version\":\"0.1.0-unstable\",\"payload\":{\"regions\":[{\"id\":\"capacity\",\"status\":\"unmeasurable\"}]}}'\nexit 0\n",
+        "#!/bin/sh\nprintf '%s\\n' '{\"schema_version\":\"1.0.0\",\"payload\":{\"regions\":[{\"id\":\"capacity\",\"status\":\"unmeasurable\"}]}}'\nexit 0\n",
     );
 
     assert_rejected(

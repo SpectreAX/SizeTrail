@@ -1,4 +1,4 @@
-Release: **v0.2.0 technical preview**
+Release: **v1.0.0 stable schema**
 
 API baseline: **macOS 13 best effort, not runtime-tested in hosted CI**
 

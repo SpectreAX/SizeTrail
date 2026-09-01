@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "enums": {
+    "capacity_basis": [
+      "attr_vol_size",
+      "attr_vol_space_used",
+      "attr_vol_space_free",
+      "attr_vol_space_available",
+      "statfs_blocks",
+      "statfs_blocks_minus_free",
+      "statfs_free_blocks",
+      "statfs_available_blocks",
+      "core_foundation_important_usage",
+      "core_foundation_opportunistic_usage"
+    ],
+    "capacity_kind": [
+      "container_allocated",
+      "volume_size",
+      "volume_used",
+      "volume_free",
+      "available_normal",
+      "available_important",
+      "available_opportunistic"
+    ],
+    "coverage_gap_reason": [
+      "no_adapters_compiled",
+      "root_unmeasurable",
+      "absent_or_changed",
+      "access_denied",
+      "policy_denied_unknown",
+      "unknown_version",
+      "not_ready",
+      "disabled",
+      "probe_failed",
+      "traversal_failed",
+      "invalid_tool_output",
+      "core_simulator_version_mismatch",
+      "simulator_identity_unavailable",
+      "runtime_size_unavailable",
+      "timed_out",
+      "rule_set_invalid",
+      "volume_snapshot_state_unavailable",
+      "cask_artifact_outside_prefix",
+      "unsupported_path_override",
+      "ambiguous_disk_image",
+      "daemon_inventory_excludes_inactive_store",
+      "excluded_by_user"
+    ],
+    "disposition_action": [
+      "permanent_unlink_after_references_close"
+    ],
+    "measurement_basis": [
+      "logical_size",
+      "allocated_footprint",
+      "private_size",
+      "volume_space_used",
+      "vendor_reported",
+      "docker_system_df",
+      "private_floor_allocated_ceiling"
+    ],
+    "measurement_coverage_status": [
+      "complete",
+      "partial",
+      "unmeasurable"
+    ],
+    "measurement_plane": [
+      "capacity",
+      "toolchain_attribution",
+      "disposition_estimate"
+    ],
+    "measurement_quantity": [
+      "logical_size",
+      "allocated_footprint",
+      "disposition_estimate",
+      "vendor_reported_size",
+      "disk_image_logical_limit",
+      "host_allocated_footprint",
+      "daemon_used",
+      "daemon_reclaimable",
+      "object_count",
+      "active_object_count"
+    ],
+    "measurement_scope_kind": [
+      "container",
+      "volume",
+      "toolchain_store",
+      "object_set"
+    ],
+    "observation_kind": [
+      "direct",
+      "derived"
+    ],
+    "observation_relation": [
+      "tested_width_correlate",
+      "possible_width_explanation",
+      "logical_allocation_gap",
+      "reclaim_policy",
+      "deletion_scope"
+    ],
+    "observation_scope": [
+      "object",
+      "inode",
+      "volume"
+    ],
+    "region_status": [
+      "complete",
+      "not_present",
+      "excluded_by_user",
+      "declared_scope_boundary",
+      "unmeasurable"
+    ],
+    "signal_id": [
+      "filesystem_compressed",
+      "resource_fork_allocated",
+      "may_share_blocks",
+      "volume_has_snapshots",
+      "sparse",
+      "purgeable",
+      "multiple_hardlinks"
+    ],
+    "unmeasurable_reason": [
+      "not_normalized_absolute",
+      "cloud_root_excluded",
+      "read_policy_verification_failed",
+      "root_path_unresolvable",
+      "root_path_not_encodable",
+      "root_identity_unavailable",
+      "symlink_traversal_rejected",
+      "volume_capacity_query_failed",
+      "shared_container_capability_unavailable",
+      "capacity_arithmetic_overflowed",
+      "core_foundation_capacity_unavailable"
+    ]
+  },
+  "properties": {
+    "environment": {
+      "properties": {
+        "generated_at_unix_seconds": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "home": {
+          "type": "string"
+        },
+        "hostname": {
+          "type": "string"
+        },
+        "tool_versions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "generated_at_unix_seconds",
+        "hostname",
+        "home",
+        "tool_versions"
+      ],
+      "type": "object"
+    },
+    "payload": {
+      "properties": {
+        "capacity": {
+          "type": "array"
+        },
+        "coverage_gaps": {
+          "type": "array"
+        },
+        "findings": {
+          "type": "array"
+        },
+        "regions": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "capacity",
+        "regions",
+        "findings",
+        "coverage_gaps"
+      ],
+      "type": "object"
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "tool_version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "tool_version",
+    "environment",
+    "payload"
+  ],
+  "title": "SizeTrail scan document",
+  "type": "object"
+}
