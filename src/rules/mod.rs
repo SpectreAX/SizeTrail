@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
 
 const BUILTIN_DOCKER: &str = include_str!("builtin/docker.toml");
+const BUILTIN_GO: &str = include_str!("builtin/go.toml");
 const BUILTIN_HOMEBREW: &str = include_str!("builtin/homebrew.toml");
 const BUILTIN_XCODE: &str = include_str!("builtin/xcode.toml");
 
-pub const COMPILED_ADAPTER_IDS: &[&str] = &["docker", "homebrew", "xcode"];
+pub const COMPILED_ADAPTER_IDS: &[&str] = &["docker", "go", "homebrew", "xcode"];
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -125,6 +126,7 @@ pub enum RuleError {
 
 pub fn builtin_rules() -> Result<Vec<Rule>, RuleError> {
     let mut rules = parse(BUILTIN_DOCKER)?;
+    rules.extend(parse(BUILTIN_GO)?);
     rules.extend(parse(BUILTIN_HOMEBREW)?);
     rules.extend(parse(BUILTIN_XCODE)?);
     Ok(rules)

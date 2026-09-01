@@ -476,7 +476,7 @@ resource fork 与压缩行为是**受支持系统上的 fixture 事实，不是�
 
 **决策：A —— 闭集 adapter 开关 + 可重复的精确 `--exclude <path>`。**
 
-- adapter 开关：`--no-xcode`、`--no-homebrew`、`--no-docker`。
+- adapter 开关：`--no-xcode`、`--no-homebrew`、`--no-docker`、`--no-go`。
 - `--exclude <path>` 可重复，排除规范化子树，**不支持 glob**（glob 容易产生用户以为被排除、实际未匹配的虚假安全感）。
 - 报告必须记录 excluded root 与 coverage 变化。
 - **不写持久配置。**
@@ -1254,6 +1254,46 @@ advice 固定 `--context orbstack`，语义与 Q56 相同：永不执行，无 `
 被否：把 PATH 上的 `/usr/local/bin/docker` 当生产 binary（它是可被替换的符号链接）；把 `desktop-linux` 或 `/var/run/docker.sock` 当 OrbStack 正例；把 `Server.Platform.Name` 单独当版本门；计量 `swap.img`、`rootfs.img` 或 `~/OrbStack`。
 
 影响：Q56 的 Desktop 专有 probe/disk 表述；policy registry、docker adapter、规则 subjects、sandbox fixture、真机验收与 v1.1 notes。`rounded_bytes`、三条 probe 上限、禁止 Engine API 仍按 Q56。
+
+---
+
+## Q58 — 第四个全深度 adapter 为 Go cache
+
+**决策：v1.2 增加 `go` adapter，只归因 `GOCACHE` 与 `GOMODCACHE`，必须全深度。**
+
+Q9 已把该项估为 +2–4 人周。Q2 的「构建缓存」收窄覆盖它。浅路径扫描仍按 Q8 否决。
+
+本机 2026-09-01 实测：生产 CLI 为 `/opt/homebrew/bin/go`（指向 Cellar `go/1.26.6`）；官方 `/usr/local/go/bin/go` 不存在。`go version` 为 `go version go1.26.6 darwin/arm64`。无 `GOENV` 文件时，清掉 `GOCACHE`/`GOMODCACHE`/`GOPATH` 后 `go env` 给出 `~/Library/Caches/go-build` 与 `~/go/pkg/mod`。
+
+**定位不得调用 `go env`。** 它绑定进程 `HOME`，在 `--root` 下会把维护者真实 cache 写成 fixture 归因（Q57 的 Desktop socket 同类错误）。位置只从扫描 HOME 的默认相对路径，以及该 HOME 下 `Library/Application Support/go/env`（`go env -w` 写的文件）读取。文件经 `Root::measure_object` + dataless；缺省或无相关键回落默认。畸形或非绝对路径 typed gap，不猜。
+
+版本门：`go version` 只接受 checked-in `go1.26.6`。生产 binary 闭集为 `/opt/homebrew/bin/go` 与 `/usr/local/go/bin/go`，先存在的那一个，不走 PATH。两者都不在 → `not_present`。未知版本不阻断默认/GOENV 路径的静态计量。
+
+`go version` 会在进程 `HOME` 下写本地 telemetry（`Library/Application Support/go/telemetry`）。`GOTELEMETRY` 不是可设置环境变量，且不得运行 `go telemetry off`（那是写配置）。生产 probe 把子进程 `HOME` 钉到 `/var/empty`，并清掉 Go 路径/toolchain 环境，使该写无法落到扫描 HOME 或用户真实 HOME。known side effect 仍公开这条命令的写倾向。
+
+不计量 `GOROOT`（与 Homebrew Cellar 重叠）、`GOPATH/src`、`GOPATH/bin`、`GOTMPDIR`。两类 cache 独立 Root，不得求和。
+
+advice 只渲染 `go clean -cache` 与 `go clean -modcache`，永不执行，无 `-r` / `-i` / `--force` / `--yes` / 管道。`--no-go` 为显式排除。
+
+被否：PATH `go`；用 `go env` 当 `--root` 下的位置权威；计量 GOROOT 或用户源码树。
+
+影响：Q8/Q9 的「v1 恰好三 adapter」在 v1.2 放开第四个；policy registry、规则、CLI、sandbox、真机验收。schema 仍为 1.0.0。
+
+---
+
+## Q58-A — 2026-09-01 版本门复核
+
+Xcode 本机 active selection 是 Command Line Tools，不能用它更新 `xcodebuild` pin；CoreSimulator `CFBundleVersion` 仍为 `1051.55`，与已验证的 `26.6 (17F113)` 行一致。Homebrew 仍无 allowlist，只读 describe-cache。OrbStack kernel / Engine / client 仍为 Q57 所钉组合。本步不改既有 pin。
+
+---
+
+## Q59 — 发布面只有 GitHub release 二进制
+
+**决策：保持 `publish = false`。用户安装面只有 GitHub release 里的 checksummed 归档。**
+
+被否：crates.io / `cargo install sizetrail` 作为第二条发布面。它绕开现有 release workflow 的双架构构建、minimum macOS 门与 SHA256SUMS。
+
+影响：README 安装段；不改发版 workflow。
 
 ---
 

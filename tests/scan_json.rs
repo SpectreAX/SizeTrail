@@ -14,7 +14,14 @@ use sizetrail::scan::{AdapterReport, scan};
 fn explicitly_excluded_adapter_scan_emits_a_complete_json_document() {
     let fixture = tempfile::tempdir().expect("scan root must be created");
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--no-docker", "--root"])
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-docker",
+            "--no-go",
+            "--root",
+        ])
         .arg(fixture.path())
         .output()
         .expect("scan must run");

@@ -1,0 +1,27 @@
+[[rule]]
+id = "go.build_cache"
+adapter = "go"
+title = "Go build cache"
+description = "Compiled package objects retained by the Go build cache."
+subjects = [{ kind = "filesystem_path", pattern = "~/Library/Caches/go-build" }]
+os = ">=13.0"
+mechanism = "generated"
+recoverability = "rebuild_time_cost"
+sensitivity = "low"
+evidence = "Go can reconstruct this cache on a later build. SizeTrail reports the host directory and does not treat it as a safe deletion target of its own."
+fixture_id = "go-build-cache"
+preconditions = { process_not_running = [] }
+
+[[rule]]
+id = "go.module_cache"
+adapter = "go"
+title = "Go module cache"
+description = "Downloaded modules retained by the Go module cache."
+subjects = [{ kind = "filesystem_path", pattern = "~/go/pkg/mod" }]
+os = ">=13.0"
+mechanism = "generated"
+recoverability = "redownload_bandwidth"
+sensitivity = "medium"
+evidence = "Go can download these modules again when the original versions remain available. SizeTrail reports the host directory and does not treat it as a host-file delete target."
+fixture_id = "go-module-cache"
+preconditions = { process_not_running = [] }

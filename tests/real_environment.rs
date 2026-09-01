@@ -285,7 +285,7 @@ fn require_real_orbstack() {
 fn real_orbstack_is_not_confused_with_not_present() {
     require_real_orbstack();
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--no-homebrew"])
+        .args(["scan", "--json", "--no-xcode", "--no-homebrew", "--no-go"])
         .output()
         .expect("Docker scan must run");
     assert!(
@@ -311,12 +311,74 @@ fn real_orbstack_is_not_confused_with_not_present() {
     );
 
     let doctor = cargo_bin_cmd!("sizetrail")
-        .args(["doctor", "--json", "--no-xcode", "--no-homebrew"])
+        .args(["doctor", "--json", "--no-xcode", "--no-homebrew", "--no-go"])
         .output()
         .expect("doctor must run");
     let diagnosis: Value = serde_json::from_slice(&doctor.stdout).expect("doctor must emit JSON");
     assert_ne!(
         diagnosis["docker"]["status"], "not_present",
         "doctor must not treat an installed OrbStack as absent: {diagnosis}"
+    );
+}
+
+fn require_real_go() {
+    let homebrew = Path::new("/opt/homebrew/bin/go");
+    let pkg = Path::new("/usr/local/go/bin/go");
+    assert!(
+        homebrew.is_file() || pkg.is_file(),
+        "this lane requires /opt/homebrew/bin/go or /usr/local/go/bin/go; a missing \
+         binary is not_present, not a positive real-machine case"
+    );
+}
+
+#[test]
+#[ignore = "requires a real Go toolchain; hosted runners without it must not run this"]
+fn real_go_is_not_confused_with_not_present() {
+    require_real_go();
+    let output = cargo_bin_cmd!("sizetrail")
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-homebrew",
+            "--no-docker",
+        ])
+        .output()
+        .expect("Go scan must run");
+    assert!(
+        matches!(output.status.code(), Some(0 | 3)),
+        "a real Go scan must produce a document, got exit {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: Value = serde_json::from_slice(&output.stdout).expect("stdout must be JSON");
+    let go = region_status(&document, "go");
+    assert_ne!(
+        go,
+        "\"not_present\"",
+        "a host with a compiled Go binary must not report the Go region as absent; {}",
+        diagnostics(&document)
+    );
+    assert_ne!(
+        go,
+        "\"excluded_by_user\"",
+        "this lane did not pass --no-go; {}",
+        diagnostics(&document)
+    );
+
+    let doctor = cargo_bin_cmd!("sizetrail")
+        .args([
+            "doctor",
+            "--json",
+            "--no-xcode",
+            "--no-homebrew",
+            "--no-docker",
+        ])
+        .output()
+        .expect("doctor must run");
+    let diagnosis: Value = serde_json::from_slice(&doctor.stdout).expect("doctor must emit JSON");
+    assert_ne!(
+        diagnosis["go"]["status"], "not_present",
+        "doctor must not treat an installed Go toolchain as absent: {diagnosis}"
     );
 }

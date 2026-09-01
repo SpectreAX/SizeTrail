@@ -13,6 +13,7 @@ use std::{fs, io};
 use clap::{Arg, ArgAction, Command, value_parser};
 use clap_complete::{Shell, generate};
 use sizetrail::adapters::docker::{DEFAULT_STORE_ROOT, DockerAdapter};
+use sizetrail::adapters::go::{BUILD_CACHE_RELATIVE, GoAdapter, MODULE_CACHE_RELATIVE};
 use sizetrail::adapters::homebrew::{discover_layout, open_prefix_root};
 use sizetrail::capacity;
 use sizetrail::fsx::Root;
@@ -20,8 +21,8 @@ use sizetrail::model::EnvironmentEnvelope;
 use sizetrail::policy::{PolicyCtx, SIDE_EFFECT_REGISTRY};
 use sizetrail::rules::{COMPILED_ADAPTER_IDS, builtin_rules};
 use sizetrail::scan::{
-    docker_report, excluded_adapter_report, homebrew_report, scan, unmeasurable_adapter_report,
-    xcode_report, xcode_report_with_sink,
+    docker_report, excluded_adapter_report, go_report, homebrew_report, scan,
+    unmeasurable_adapter_report, xcode_report, xcode_report_with_sink,
 };
 
 fn command() -> Command {
@@ -64,6 +65,7 @@ fn command() -> Command {
                         .long("no-docker")
                         .action(ArgAction::SetTrue),
                 )
+                .arg(Arg::new("no-go").long("no-go").action(ArgAction::SetTrue))
                 .arg(
                     Arg::new("exclude")
                         .long("exclude")
@@ -105,6 +107,7 @@ fn command() -> Command {
                         .long("no-docker")
                         .action(ArgAction::SetTrue),
                 )
+                .arg(Arg::new("no-go").long("no-go").action(ArgAction::SetTrue))
                 .arg(
                     Arg::new("exclude")
                         .long("exclude")
@@ -151,26 +154,31 @@ fn run() -> Result<u8, String> {
             let no_xcode = arguments.get_flag("no-xcode");
             let no_homebrew = arguments.get_flag("no-homebrew");
             let no_docker = arguments.get_flag("no-docker");
+            let no_go = arguments.get_flag("no-go");
+            let enabled = EnabledAdapters {
+                xcode: !no_xcode,
+                homebrew: !no_homebrew,
+                docker: !no_docker,
+                go: !no_go,
+            };
             let json_output = arguments.get_flag("json");
             let requested_excludes = arguments
                 .get_many::<PathBuf>("exclude")
                 .map(|values| values.cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
-            if no_xcode && no_homebrew && no_docker && !requested_excludes.is_empty() {
+            if enabled.none() && !requested_excludes.is_empty() {
                 eprintln!("sizetrail: --exclude matches no enabled scan root");
                 return Ok(2);
             }
             let opened = Root::open(&root);
-            let excludes = if no_xcode && no_homebrew && no_docker {
+            let excludes = if enabled.none() {
                 Vec::new()
             } else if let Ok(scan_root) = opened.as_ref() {
                 match validate_excludes(
                     scan_root,
                     &root,
                     &requested_excludes,
-                    !no_xcode,
-                    !no_homebrew,
-                    !no_docker,
+                    enabled,
                     root_override.as_deref(),
                 ) {
                     Ok(excludes) => excludes,
@@ -225,8 +233,20 @@ fn run() -> Result<u8, String> {
             } else {
                 unmeasurable_adapter_report("docker")
             };
+            let go = if no_go {
+                excluded_adapter_report("go")
+            } else if let Ok(scan_root) = opened.as_ref() {
+                go_report(scan_root, &mut ctx, &excludes)
+            } else {
+                unmeasurable_adapter_report("go")
+            };
             if !json_output {
-                for finding in homebrew.findings.iter().chain(&docker.findings) {
+                for finding in homebrew
+                    .findings
+                    .iter()
+                    .chain(&docker.findings)
+                    .chain(&go.findings)
+                {
                     println!(
                         "{}\t{}\t{}",
                         finding.id,
@@ -250,7 +270,12 @@ fn run() -> Result<u8, String> {
                     .tool_versions
                     .insert("docker".to_owned(), version.clone());
             }
-            let document = scan(environment, capacity, vec![homebrew, xcode, docker]);
+            if let Some(version) = &go.tool_version {
+                environment
+                    .tool_versions
+                    .insert("go".to_owned(), version.clone());
+            }
+            let document = scan(environment, capacity, vec![homebrew, xcode, docker, go]);
 
             if json_output {
                 let rendered =
@@ -315,26 +340,31 @@ fn doctor(matches: &clap::ArgMatches, arguments: &clap::ArgMatches) -> Result<u8
     let no_xcode = arguments.get_flag("no-xcode");
     let no_homebrew = arguments.get_flag("no-homebrew");
     let no_docker = arguments.get_flag("no-docker");
+    let no_go = arguments.get_flag("no-go");
+    let enabled = EnabledAdapters {
+        xcode: !no_xcode,
+        homebrew: !no_homebrew,
+        docker: !no_docker,
+        go: !no_go,
+    };
     let requested_excludes = arguments
         .get_many::<PathBuf>("exclude")
         .map(|values| values.cloned().collect::<Vec<_>>())
         .unwrap_or_default();
-    if no_xcode && no_homebrew && no_docker && !requested_excludes.is_empty() {
+    if enabled.none() && !requested_excludes.is_empty() {
         eprintln!("sizetrail: --exclude matches no enabled scan root");
         return Ok(2);
     }
     let opened = Root::open(&root);
     let root_ready = opened.is_ok();
-    let excludes = if no_xcode && no_homebrew && no_docker {
+    let excludes = if enabled.none() {
         Vec::new()
     } else if let Ok(scan_root) = opened.as_ref() {
         match validate_excludes(
             scan_root,
             &root,
             &requested_excludes,
-            !no_xcode,
-            !no_homebrew,
-            !no_docker,
+            enabled,
             root_override.as_deref(),
         ) {
             Ok(excludes) => excludes,
@@ -371,10 +401,18 @@ fn doctor(matches: &clap::ArgMatches, arguments: &clap::ArgMatches) -> Result<u8
     } else {
         unmeasurable_adapter_report("docker")
     };
+    let go = if no_go {
+        excluded_adapter_report("go")
+    } else if let Ok(scan_root) = opened.as_ref() {
+        go_report(scan_root, &mut ctx, &excludes)
+    } else {
+        unmeasurable_adapter_report("go")
+    };
     let ready = root_ready
         && report_is_ready(&homebrew)
         && report_is_ready(&xcode)
-        && report_is_ready(&docker);
+        && report_is_ready(&docker)
+        && report_is_ready(&go);
     let report = serde_json::json!({
         "schema_version": sizetrail::model::SCHEMA_VERSION,
         "tool_version": sizetrail::model::TOOL_VERSION,
@@ -389,6 +427,7 @@ fn doctor(matches: &clap::ArgMatches, arguments: &clap::ArgMatches) -> Result<u8
         "homebrew": homebrew,
         "xcode": xcode,
         "docker": docker,
+        "go": go,
     });
     if arguments.get_flag("json") {
         println!(
@@ -397,7 +436,7 @@ fn doctor(matches: &clap::ArgMatches, arguments: &clap::ArgMatches) -> Result<u8
         );
     } else {
         println!(
-            "root: {}\nhomebrew: {}\nxcode: {}\ndocker: {}",
+            "root: {}\nhomebrew: {}\nxcode: {}\ndocker: {}\ngo: {}",
             report["root"]["status"].as_str().unwrap_or("unmeasurable"),
             report["homebrew"]["status"]
                 .as_str()
@@ -405,7 +444,8 @@ fn doctor(matches: &clap::ArgMatches, arguments: &clap::ArgMatches) -> Result<u8
             report["xcode"]["status"].as_str().unwrap_or("unmeasurable"),
             report["docker"]["status"]
                 .as_str()
-                .unwrap_or("unmeasurable")
+                .unwrap_or("unmeasurable"),
+            report["go"]["status"].as_str().unwrap_or("unmeasurable")
         );
     }
     Ok(if ready { 0 } else { 3 })
@@ -497,6 +537,7 @@ fn explain(matches: &clap::ArgMatches, arguments: &clap::ArgMatches) -> Result<u
                 "homebrew" => homebrew_report(&scan_root, &mut ctx, &[], root_override.as_deref()),
                 "xcode" => xcode_report(&scan_root, &mut ctx, &[]),
                 "docker" => docker_report(&scan_root, &mut ctx, &[]),
+                "go" => go_report(&scan_root, &mut ctx, &[]),
                 _ => unreachable!("compiled adapter ids are matched exhaustively"),
             }
         }
@@ -604,27 +645,51 @@ fn render_explanation(
     Ok(0)
 }
 
+#[derive(Clone, Copy)]
+struct EnabledAdapters {
+    xcode: bool,
+    homebrew: bool,
+    docker: bool,
+    go: bool,
+}
+
+impl EnabledAdapters {
+    const fn none(self) -> bool {
+        !self.xcode && !self.homebrew && !self.docker && !self.go
+    }
+}
+
 fn validate_excludes(
     root: &Root,
     requested_root: &Path,
     requested: &[PathBuf],
-    xcode_enabled: bool,
-    homebrew_enabled: bool,
-    docker_enabled: bool,
+    enabled: EnabledAdapters,
     sandbox_root: Option<&Path>,
 ) -> Result<Vec<PathBuf>, String> {
-    let layout = homebrew_enabled
+    let layout = enabled
+        .homebrew
         .then(|| discover_layout(sandbox_root))
         .flatten();
     let prefix_root = layout
         .as_ref()
         .and_then(|layout| open_prefix_root(layout).ok());
-    let docker_data_folder = docker_enabled
+    let docker_data_folder = enabled
+        .docker
         .then(|| DockerAdapter::discover_data_folder(root))
         .flatten();
     let docker_data_root = docker_data_folder
         .as_ref()
         .and_then(|folder| Root::open(folder).ok());
+    let go_cache_roots = if enabled.go {
+        GoAdapter::discover_cache_roots(root)
+    } else {
+        Vec::new()
+    };
+    let go_custom_roots = go_cache_roots
+        .iter()
+        .filter(|path| !path.starts_with(root.path()))
+        .filter_map(|path| Root::open(path).ok())
+        .collect::<Vec<_>>();
     let mut excludes = Vec::new();
     for input in requested {
         if input
@@ -666,11 +731,21 @@ fn validate_excludes(
             .as_ref()
             .filter(|prefix| candidate.starts_with(prefix.path()));
         let home_roots = [
-            xcode_enabled.then(|| root.path().join("Library/Developer/Xcode")),
-            xcode_enabled.then(|| root.path().join("Library/Developer/CoreSimulator")),
-            homebrew_enabled.then(|| root.path().join("Library/Caches/Homebrew")),
-            homebrew_enabled.then(|| root.path().join("Library/Logs/Homebrew")),
-            docker_enabled.then(|| root.path().join(DEFAULT_STORE_ROOT)),
+            enabled
+                .xcode
+                .then(|| root.path().join("Library/Developer/Xcode")),
+            enabled
+                .xcode
+                .then(|| root.path().join("Library/Developer/CoreSimulator")),
+            enabled
+                .homebrew
+                .then(|| root.path().join("Library/Caches/Homebrew")),
+            enabled
+                .homebrew
+                .then(|| root.path().join("Library/Logs/Homebrew")),
+            enabled.docker.then(|| root.path().join(DEFAULT_STORE_ROOT)),
+            enabled.go.then(|| root.path().join(BUILD_CACHE_RELATIVE)),
+            enabled.go.then(|| root.path().join(MODULE_CACHE_RELATIVE)),
         ];
         let home_match = candidate.starts_with(root.path())
             && home_roots
@@ -680,7 +755,10 @@ fn validate_excludes(
         let docker_custom_match = docker_data_folder
             .as_ref()
             .is_some_and(|folder| overlaps(&candidate, folder));
-        if prefix_owner.is_none() && !home_match && !docker_custom_match {
+        let go_match = go_cache_roots
+            .iter()
+            .any(|scan_root| overlaps(&candidate, scan_root));
+        if prefix_owner.is_none() && !home_match && !docker_custom_match && !go_match {
             return Err(format!(
                 "exclude matches no enabled scan root: {}",
                 input.display()
@@ -688,6 +766,11 @@ fn validate_excludes(
         }
         let owner = prefix_owner
             .or_else(|| docker_data_root.as_ref().filter(|_| docker_custom_match))
+            .or_else(|| {
+                go_custom_roots
+                    .iter()
+                    .find(|opened| candidate.starts_with(opened.path()))
+            })
             .unwrap_or(root);
         match owner.path_exists_without_descending(&candidate) {
             Ok(true) => excludes.push(candidate),

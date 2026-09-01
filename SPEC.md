@@ -18,6 +18,7 @@
 | v0.2 范围 | 追加 Homebrew adapter |
 | v1.0 范围 | 追加 Docker Desktop adapter，schema 稳定 |
 | v1.1 范围 | Docker 验证对象改为 OrbStack（Q57）；schema 仍为 1.0.0 |
+| v1.2 范围 | 第四个全深度 adapter：Go `GOCACHE` / `GOMODCACHE`（Q58）；发布面仍仅 GitHub（Q59） |
 
 ---
 
@@ -347,7 +348,7 @@ trait ToolchainAdapter {
 
 **adapter 纪律（Q8）：**
 
-- v1 只上 **3 个全深度** adapter：Xcode/CoreSimulator、Homebrew、Docker（OrbStack 验证）。**浅 adapter 比没有更差** —— 它把 mole 的 feature-local 问题搬进我们自己的架构。
+- v1 上 **3 个全深度** adapter：Xcode/CoreSimulator、Homebrew、Docker（OrbStack 验证）。v1.2 增加第四个全深度 `go`。**浅 adapter 比没有更差** —— 它把 mole 的 feature-local 问题搬进我们自己的架构。
 - 每个 adapter **必须钉住已验证的第三方 CLI 版本范围**，未知版本显式降级。这是最大的长期维护风险：adapter 包装的是第三方 CLI，输出格式会变。
 - 规则**只能引用已编译的 adapter id**，不能提供任意命令。**这是安全属性，不是架构品味** —— 允许 TOML 携带任意命令等于开命令注入面。
 
@@ -749,7 +750,7 @@ sizetrail rules [--json]             查看内置规则表
 sizetrail completion <shell>         生成补全脚本（仅打印 stdout）
 ```
 
-`scan` / `doctor` 的开关：`--no-xcode`、`--no-homebrew`、`--no-docker`、`--exclude <path>`（可重复）。
+`scan` / `doctor` 的开关：`--no-xcode`、`--no-homebrew`、`--no-docker`、`--no-go`、`--exclude <path>`（可重复）。
 
 全局：`--debug`、`--no-color`、`--version`、`--root <path>`（测试用）。
 
@@ -870,6 +871,13 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | Docker live `explain` 与 `--from` / `--path` | `--from` 零 probe；live 只重探 docker owner | — | CLI fixture | live 仅 docker probe 闭集 | object-set `--path` 明确失败；filesystem subject 保持既有路径输出 |
 | Docker `--exclude` 默认与自定义 disk Root | 校验后在 inventory/probe 计量前生效 | `path_exists_without_descending` | default/custom `data_dir` fixtures | — | 覆盖 `~/Library/Group Containers/HUAQ24HBR6.dev.orbstack` 与 `vmconfig.json` 发现的 `data_dir`。object-set 不接受路径 exclude |
 | Docker sandbox 关 probe 仍计量 raw | `SIZETRAIL_NO_DOCKER_PROBE` | — | 产品 deny-write sandbox | 0 | sandbox HOME 放入 `data.img.raw` 并断言 finding 出现；三条 CLI 调用为 0 |
+| Go `go version`（Homebrew 或官方 pkg binary） | `Command` 仅 policy；先存在者调用一次 | — | adapter fixture + CLI fixture + TreeSnapshot | 是，max 1、10s | 只接受 `/opt/homebrew/bin/go` 与 `/usr/local/go/bin/go`；不走 PATH。只接受 checked-in `go1.26.6`。未知版本不阻断静态计量。两者都不在 → `not_present`。子进程 `HOME=/var/empty` 并清除 Go 路径环境，避免默认 telemetry 写入扫描 HOME；不得运行 `go telemetry off` |
+| Go cache 定位 | 扫描 HOME 默认路径 + 该 HOME 的 `Library/Application Support/go/env` | `getattrlist` 精确符号集 | default/GOENV/malformed fixtures | 0（不运行 `go env`） | 默认 `~/Library/Caches/go-build` 与 `~/go/pkg/mod`。缺键回落默认；畸形或非绝对路径 typed gap，不猜。不计量 `GOROOT` / `GOPATH/src` / `GOPATH/bin` / `GOTMPDIR`。两类 cache 不得求和 |
+| Go command advice | 只渲染 stdout；永不进入 probe runner | — | adapter fixture | 0 | 只渲染 `go clean -cache` 与 `go clean -modcache`。无 `-r` / `-i` / `--force` / `--yes` / 管道 |
+| Go `scan` / `doctor` / `--no-go` | 只读 CLI；adapter 经 `go_report` | — | CLI fixture + deny-write sandbox | 生产 probe 受 registry 限制 | `--no-go` 为 `excluded_by_user`、退出 0。hosted 无 Go 的 `not_present` 不是正例 |
+| Go `--exclude` 默认与 GOENV 自定义 Root | 校验后在 inventory 计量前生效 | `path_exists_without_descending` | default/custom GOENV fixtures | — | 覆盖两个 cache root 与 GOENV 改向的绝对目录 |
+| Go sandbox 关 probe 仍计量 cache | `SIZETRAIL_NO_GO_PROBE` | — | 产品 deny-write sandbox | 0 | sandbox HOME 放入 `go-build` 并断言 finding 出现；`go version` 调用为 0 |
+| Go 真机验收 | 维护者机器；hosted runner 无 Go 时不得当正例 | — | `#[ignore]` real-environment 测试 | 真机才跑 | **不得**把 hosted `not_present` 写成正例 |
 | OrbStack 真机验收 | 维护者机器；hosted runner 无 OrbStack | — | `#[ignore]` real-environment 测试 | 真机才跑 | **不得**把 hosted `not_present` 写成正例。记录 OrbStack/CLI/Engine/API/kernel 与 socket 由维护者执行，不在本小节发布数字 |
 | Docker fixture benchmark | stubbed `system df` + sparse raw | — | ignored test + runner artifact | 0 | 只发布 runner+fixture 原始墙钟；不推广 |
 | v1 schema freeze 与 `--from` | 生成文档逐字节锁定 | — | CLI fixture + generated docs gate | — | `SCHEMA_VERSION` 为 `1.0.0`。v0.x report 被拒绝，不得尽力误读 |
@@ -1175,6 +1183,16 @@ actual host free delta；该数字只有用户执行厂商命令后比较两份�
 4. schema 仍为 `1.0.0`；crate / `tool_version` 为 `1.1.0`；notes 落
    `docs/release-notes/v1.1.0.md`。
 5. hosted runner 无 OrbStack 时 `not_present` 仍不得写成正例。
+
+### 12.4 P6 — Go cache adapter（Q58–Q59）
+
+1. `COMPILED_ADAPTER_IDS` 为 `docker`、`go`、`homebrew`、`xcode`。
+2. 生产 binary 只允许 `/opt/homebrew/bin/go` 与 `/usr/local/go/bin/go`；先存在者调用 `go version`，每次扫描至多一次，共用 `SIZETRAIL_NO_GO_PROBE`。子进程 `HOME=/var/empty`。只接受 checked-in `go1.26.6`。
+3. 位置只从扫描 HOME 默认路径与该 HOME 的 `Library/Application Support/go/env` 读取，不运行 `go env`。默认：`~/Library/Caches/go-build`、`~/go/pkg/mod`。
+4. 不计量 `GOROOT`、`GOPATH/src`、`GOPATH/bin`、`GOTMPDIR`。两类 cache 不得求和。
+5. 规则 `go.build_cache`、`go.module_cache`；advice 只渲染 `go clean -cache` / `go clean -modcache`。
+6. `--no-go` 为 `excluded_by_user`。hosted 无 Go 不得把 `not_present` 当正例。
+7. schema 仍为 `1.0.0`；crate `1.2.0`；notes 落 `docs/release-notes/v1.2.0.md`。发布面按 Q59 仍仅 GitHub。
 
 ---
 

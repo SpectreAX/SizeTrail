@@ -2,7 +2,7 @@
 
 SizeTrail is a permanently read-only, audit-grade macOS storage attribution reporter for developers.
 
-It explains Xcode, CoreSimulator, Homebrew, and OrbStack-hosted Docker storage with explicit measurement
+It explains Xcode, CoreSimulator, Homebrew, OrbStack-hosted Docker, and Go cache storage with explicit measurement
 bases, uncertainty intervals, typed coverage gaps, and evidence-backed advice. It does not delete
 files, execute advice, claim to reproduce Apple’s System Data total, or turn an unreadable region
 into zero bytes.
@@ -16,6 +16,7 @@ JSON signal set is the versioned machine surface.
 - Xcode build state, archives, DeviceSupport, simulator devices, and registered runtimes.
 - Homebrew caches, logs, Cellar, Caskroom, and taps, without executing `brew`.
 - OrbStack host disk images and Docker daemon object sets, without summing those planes.
+- Go build and module caches, located from the scan home rather than from `go env`.
 - Allocation intervals whose lower bound fails closed when required evidence is absent.
 - Typed reasons for missing coverage, including unknown tool versions and policy-denied paths.
 - Vendor commands or precise report paths as advice; SizeTrail never runs them.
@@ -37,7 +38,7 @@ is a release claim only when that release commit’s CI run is green. The API ba
 separate from hosted runtime evidence.
 
 <!-- BEGIN GENERATED: support-matrix -->
-Release: **v1.1.0 OrbStack docker verification**
+Release: **v1.2.0 Go cache adapter**
 
 API baseline: **macOS 13 best effort, not runtime-tested in hosted CI**
 
@@ -124,8 +125,9 @@ global Full Disk Access state.
 ## Install
 
 Download the archive for your architecture from the latest GitHub release, extract it, and place
-`sizetrail` somewhere on your `PATH`. Release binaries are not notarized; inspect the checksums and
-source before running them.
+`sizetrail` somewhere on your `PATH`. GitHub release archives are the only published install path;
+there is no crates.io crate, and `cargo install sizetrail` is not supported. Release binaries are
+not notarized; inspect the checksums and source before running them.
 
 Shell completion is printed to stdout so installation remains your choice:
 

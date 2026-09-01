@@ -22,7 +22,7 @@ fn rules_json_is_the_compiled_toml_rule_set() {
     assert!(output.status.success());
     let rules: Value = serde_json::from_slice(&output.stdout).expect("rules stdout must be JSON");
     let rules = rules.as_array().expect("rules must be an array");
-    assert_eq!(rules.len(), 18);
+    assert_eq!(rules.len(), 20);
     assert!(
         [
             "docker.virtual_disk",
@@ -36,6 +36,11 @@ fn rules_json_is_the_compiled_toml_rule_set() {
             .iter()
             .any(|rule| rule["id"] == id && rule["adapter"] == "docker"))
     );
+    assert!(["go.build_cache", "go.module_cache"].into_iter().all(|id| {
+        rules
+            .iter()
+            .any(|rule| rule["id"] == id && rule["adapter"] == "go")
+    }));
     assert!(rules.iter().all(|rule| rule.get("command").is_none()
         && rule["evidence"].as_str().is_some_and(|v| !v.is_empty())));
 }
@@ -143,7 +148,14 @@ fn explain_from_is_snapshot_only_and_validates_schema_and_id_versions() {
 fn doctor_can_skip_xcode_without_starting_coresimulator() {
     let fixture = tempfile::tempdir().expect("fixture root must be created");
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["doctor", "--json", "--no-xcode", "--no-docker", "--root"])
+        .args([
+            "doctor",
+            "--json",
+            "--no-xcode",
+            "--no-docker",
+            "--no-go",
+            "--root",
+        ])
         .arg(fixture.path())
         .output()
         .expect("doctor must run");
@@ -156,7 +168,7 @@ fn doctor_can_skip_xcode_without_starting_coresimulator() {
             .as_array()
             .expect("registry must be an array")
             .len(),
-        9
+        11
     );
     assert_eq!(
         json["side_effect_policy"][4]["known_side_effects"]
@@ -171,7 +183,14 @@ fn doctor_can_skip_xcode_without_starting_coresimulator() {
 fn doctor_labels_term_program_as_an_unverified_hint() {
     let fixture = tempfile::tempdir().expect("fixture root must be created");
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["doctor", "--json", "--no-xcode", "--no-docker", "--root"])
+        .args([
+            "doctor",
+            "--json",
+            "--no-xcode",
+            "--no-docker",
+            "--no-go",
+            "--root",
+        ])
         .arg(fixture.path())
         .env("TERM_PROGRAM", "FixtureTerminal")
         .output()

@@ -1,4 +1,4 @@
-Release: **v1.1.0 OrbStack docker verification**
+Release: **v1.2.0 Go cache adapter**
 
 API baseline: **macOS 13 best effort, not runtime-tested in hosted CI**
 

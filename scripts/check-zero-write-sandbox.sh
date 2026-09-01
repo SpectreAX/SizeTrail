@@ -22,6 +22,7 @@ test -x "$sandbox"
 mkdir -p \
   "$probe_root/home" \
   "$probe_root/home/Library/Group Containers/HUAQ24HBR6.dev.orbstack/data" \
+  "$probe_root/home/Library/Caches/go-build" \
   "$probe_root/tmp" \
   "$probe_root/xdg/cache" \
   "$probe_root/xdg/config" \
@@ -29,6 +30,7 @@ mkdir -p \
   "$probe_root/xdg/state" \
   "$probe_root/xdg/runtime"
 : >"$probe_root/home/Library/Group Containers/HUAQ24HBR6.dev.orbstack/data/data.img.raw"
+: >"$probe_root/home/Library/Caches/go-build/cached-object"
 
 environment=(
   "HOME=$probe_root/home"
@@ -43,6 +45,7 @@ environment=(
   "XDG_RUNTIME_DIR=$probe_root/xdg/runtime"
   "SIZETRAIL_NO_XCODE_PROBE=1"
   "SIZETRAIL_NO_DOCKER_PROBE=1"
+  "SIZETRAIL_NO_GO_PROBE=1"
 )
 
 run_token="sizetrail-zero-write-${GITHUB_RUN_ID:-local}-$$-$RANDOM"
@@ -166,6 +169,7 @@ require_status scan 0 3
 require_output scan '"schema_version":"1.0.0"'
 require_output scan '"id":"capacity","status":"complete"'
 require_output scan '"rule_id":"docker.virtual_disk"'
+require_output scan '"rule_id":"go.build_cache"'
 
 # The probe kill-switch leaves the Xcode region applicable but unmeasured, which is exit 3 by
 # Q21 — semantically distinct from the `--no-xcode` exclusion that exits 0.

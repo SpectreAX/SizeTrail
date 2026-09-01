@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "tool_version": "1.1.0",
+  "tool_version": "1.2.0",
   "environment": {
     "generated_at_unix_seconds": 1800000000,
     "hostname": "fixture-host",
