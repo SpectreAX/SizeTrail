@@ -68,8 +68,12 @@ impl ToolchainAdapter for DockerAdapter<'_> {
         probe(ctx, self.home_root.path())
     }
 
-    fn inventory(&self, _ctx: &mut PolicyCtx<'_>, state: &AdapterState) -> Inventory {
-        self.disk_inventory(state)
+    fn inventory(&self, ctx: &mut PolicyCtx<'_>, state: &AdapterState) -> Inventory {
+        let mut inventory = self.disk_inventory(state);
+        if matches!(state, AdapterState::Ready { .. }) {
+            self.append_daemon_inventory(ctx, state, &mut inventory);
+        }
+        inventory
     }
 
     fn classify(&self, inventory: &Inventory) -> Result<Vec<Finding>, InventoryGapReason> {
@@ -167,6 +171,49 @@ impl DockerAdapter<'_> {
             }
         }
         inventory
+    }
+
+    fn append_daemon_inventory(
+        &self,
+        ctx: &mut PolicyCtx<'_>,
+        state: &AdapterState,
+        inventory: &mut Inventory,
+    ) {
+        match system_df(ctx, state) {
+            Ok(rows) => {
+                let mut items = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    match daemon_item(row) {
+                        Ok(item) => items.push(item),
+                        Err(reason) => {
+                            inventory.gaps.push(InventoryGap {
+                                region: "docker.daemon_inventory",
+                                path: None,
+                                reason,
+                                stage: Some(InventoryStage::DockerSystemDf),
+                                errno: None,
+                            });
+                            return;
+                        }
+                    }
+                }
+                inventory.items.extend(items);
+                inventory.gaps.push(InventoryGap {
+                    region: "docker.daemon_inventory",
+                    path: None,
+                    reason: InventoryGapReason::DaemonInventoryExcludesInactiveStore,
+                    stage: Some(InventoryStage::DockerSystemDf),
+                    errno: None,
+                });
+            }
+            Err(reason) => inventory.gaps.push(InventoryGap {
+                region: "docker.daemon_inventory",
+                path: None,
+                reason,
+                stage: Some(InventoryStage::DockerSystemDf),
+                errno: None,
+            }),
+        }
     }
 
     fn configured_data_folder(&self) -> Result<Option<PathBuf>, InventoryGap> {
@@ -378,6 +425,87 @@ impl DockerAdapter<'_> {
             observations: object_observations(&measured),
             identity: InventoryIdentity::Path,
         })
+    }
+}
+
+fn daemon_item(row: &DockerUsageRow) -> Result<InventoryItem, InventoryGapReason> {
+    let used = rounded_bytes(&row.size).map_err(|_| InventoryGapReason::InvalidToolOutput)?;
+    let reclaimable =
+        rounded_bytes(&row.reclaimable).map_err(|_| InventoryGapReason::InvalidToolOutput)?;
+    let scope = MeasurementScope {
+        kind: MeasurementScopeKind::ObjectSet,
+        id: row.object_set_id.to_owned(),
+    };
+    let complete = MeasurementCoverage {
+        status: MeasurementCoverageStatus::Complete,
+        gap_ids: Vec::new(),
+    };
+    Ok(InventoryItem {
+        rule_id: row.object_set_id.to_owned(),
+        subject: FindingSubject::ToolchainObjectSet {
+            object_set_id: row.object_set_id.to_owned(),
+        },
+        path: None,
+        measurements: vec![
+            daemon_count(
+                MeasurementQuantity::ObjectCount,
+                row.total_count,
+                scope.clone(),
+                complete.clone(),
+            ),
+            daemon_count(
+                MeasurementQuantity::ActiveObjectCount,
+                row.active_count,
+                scope.clone(),
+                complete.clone(),
+            ),
+            daemon_rounded(
+                MeasurementQuantity::DaemonUsed,
+                used,
+                scope.clone(),
+                complete.clone(),
+            ),
+            daemon_rounded(
+                MeasurementQuantity::DaemonReclaimable,
+                reclaimable,
+                scope,
+                complete,
+            ),
+        ],
+        observations: Vec::new(),
+        identity: InventoryIdentity::Path,
+    })
+}
+
+fn daemon_count(
+    quantity: MeasurementQuantity,
+    count: u64,
+    scope: MeasurementScope,
+    coverage: MeasurementCoverage,
+) -> Measurement {
+    Measurement {
+        plane: MeasurementPlane::ToolchainAttribution,
+        quantity,
+        basis: MeasurementBasis::DockerSystemDf,
+        scope,
+        coverage,
+        value: MeasurementValue::ExactCount { count },
+    }
+}
+
+fn daemon_rounded(
+    quantity: MeasurementQuantity,
+    value: MeasurementValue,
+    scope: MeasurementScope,
+    coverage: MeasurementCoverage,
+) -> Measurement {
+    Measurement {
+        plane: MeasurementPlane::ToolchainAttribution,
+        quantity,
+        basis: MeasurementBasis::DockerSystemDf,
+        scope,
+        coverage,
+        value,
     }
 }
 

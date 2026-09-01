@@ -300,7 +300,10 @@ pub fn unmeasurable_adapter_report(id: &str) -> AdapterReport {
 const fn coverage_gap_status(reason: InventoryGapReason) -> RegionStatus {
     match reason {
         InventoryGapReason::CaskArtifactOutsidePrefix
-        | InventoryGapReason::UnsupportedPathOverride => RegionStatus::DeclaredScopeBoundary,
+        | InventoryGapReason::UnsupportedPathOverride
+        | InventoryGapReason::DaemonInventoryExcludesInactiveStore => {
+            RegionStatus::DeclaredScopeBoundary
+        }
         InventoryGapReason::AbsentOrChanged
         | InventoryGapReason::AccessDenied
         | InventoryGapReason::PolicyDeniedUnknown
@@ -348,6 +351,9 @@ const fn coverage_reason(reason: InventoryGapReason) -> CoverageGapReason {
         }
         InventoryGapReason::UnsupportedPathOverride => CoverageGapReason::UnsupportedPathOverride,
         InventoryGapReason::AmbiguousDiskImage => CoverageGapReason::AmbiguousDiskImage,
+        InventoryGapReason::DaemonInventoryExcludesInactiveStore => {
+            CoverageGapReason::DaemonInventoryExcludesInactiveStore
+        }
     }
 }
 
@@ -371,6 +377,9 @@ const fn gap_reason_id(reason: InventoryGapReason) -> &'static str {
         InventoryGapReason::CaskArtifactOutsidePrefix => "cask_artifact_outside_prefix",
         InventoryGapReason::UnsupportedPathOverride => "unsupported_path_override",
         InventoryGapReason::AmbiguousDiskImage => "ambiguous_disk_image",
+        InventoryGapReason::DaemonInventoryExcludesInactiveStore => {
+            "daemon_inventory_excludes_inactive_store"
+        }
     }
 }
 

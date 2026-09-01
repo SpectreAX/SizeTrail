@@ -11,7 +11,10 @@ struct RuleFixture {
     mechanism: String,
     recoverability: String,
     sensitivity: String,
-    expected_path: String,
+    #[serde(default)]
+    expected_path: Option<String>,
+    #[serde(default)]
+    expected_object_set_id: Option<String>,
 }
 
 #[test]
@@ -39,12 +42,24 @@ fn every_builtin_rule_has_evidence_subjects_adapter_and_fixture() {
         assert_eq!(fixture.mechanism, rule.mechanism.as_str());
         assert_eq!(fixture.recoverability, rule.recoverability.as_str());
         assert_eq!(fixture.sensitivity, rule.sensitivity.as_str());
-        assert!(rule.subjects.iter().any(|subject| match subject {
-            RuleSubjectPattern::FilesystemPath { pattern } => {
-                fixture_path_matches(pattern, &fixture.expected_path)
-            }
-            RuleSubjectPattern::ToolchainObjectSet { .. } => false,
-        }));
+        assert_eq!(
+            fixture.expected_path.is_some(),
+            fixture.expected_object_set_id.is_none(),
+            "fixture {} must name exactly one subject kind",
+            rule.fixture_id
+        );
+        assert!(
+            rule.subjects.iter().any(|subject| match subject {
+                RuleSubjectPattern::FilesystemPath { pattern } => fixture
+                    .expected_path
+                    .as_deref()
+                    .is_some_and(|path| fixture_path_matches(pattern, path)),
+                RuleSubjectPattern::ToolchainObjectSet { object_set_id } =>
+                    fixture.expected_object_set_id.as_deref() == Some(object_set_id.as_str()),
+            }),
+            "fixture subject must match a compiled subject for {}",
+            rule.id
+        );
         assert_eq!(
             rule.selection_override.is_some(),
             rule.override_reason.is_some(),

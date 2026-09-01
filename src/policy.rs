@@ -259,8 +259,8 @@ impl PolicyCtx<'static> {
 }
 
 impl PolicyCtx<'_> {
-    #[cfg(test)]
-    pub(crate) fn for_test(policies: &[ProbePolicy]) -> PolicyCtx<'_> {
+    #[must_use]
+    pub fn for_test(policies: &[ProbePolicy]) -> PolicyCtx<'_> {
         PolicyCtx {
             tracker: InvocationTracker::for_test(policies),
         }
@@ -365,7 +365,6 @@ impl InvocationTracker<'static> {
 }
 
 impl<'a> InvocationTracker<'a> {
-    #[cfg(test)]
     fn for_test(policies: &'a [ProbePolicy]) -> Self {
         Self {
             policies,

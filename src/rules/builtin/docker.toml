@@ -15,3 +15,59 @@ sensitivity = "high"
 evidence = "The file is the VM disk that holds images, containers, and volumes together. Measuring it does not make it a safe deletion target, and SizeTrail never treats the path as reclaimable store cleanup."
 fixture_id = "docker-virtual-disk"
 preconditions = { process_not_running = ["Docker", "com.docker.hyperkit", "com.docker.virtualization"] }
+
+[[rule]]
+id = "docker.images"
+adapter = "docker"
+title = "Docker images"
+description = "Image object set reported by the Docker Desktop daemon."
+subjects = [{ kind = "toolchain_object_set", object_set_id = "docker.images" }]
+os = ">=13.0"
+mechanism = "generated"
+recoverability = "redownload_bandwidth"
+sensitivity = "medium"
+evidence = "The daemon can pull these images again when the original tags remain available. SizeTrail reports the vendor category and does not treat it as a host-file delete target."
+fixture_id = "docker-images"
+preconditions = { process_not_running = ["Docker", "com.docker.hyperkit", "com.docker.virtualization"] }
+
+[[rule]]
+id = "docker.containers"
+adapter = "docker"
+title = "Docker containers"
+description = "Container object set reported by the Docker Desktop daemon."
+subjects = [{ kind = "toolchain_object_set", object_set_id = "docker.containers" }]
+os = ">=13.0"
+mechanism = "user_owned"
+recoverability = "unrecoverable"
+sensitivity = "high"
+evidence = "Containers hold writable runtime state inside the VM. SizeTrail reports the daemon category without treating it as a safe deletion target."
+fixture_id = "docker-containers"
+preconditions = { process_not_running = ["Docker", "com.docker.hyperkit", "com.docker.virtualization"] }
+
+[[rule]]
+id = "docker.volumes"
+adapter = "docker"
+title = "Docker volumes"
+description = "Volume object set reported by the Docker Desktop daemon."
+subjects = [{ kind = "toolchain_object_set", object_set_id = "docker.volumes" }]
+os = ">=13.0"
+mechanism = "user_owned"
+recoverability = "unrecoverable"
+sensitivity = "high"
+evidence = "Named and anonymous volumes hold application data inside the VM. SizeTrail reports the daemon category without treating it as a safe deletion target."
+fixture_id = "docker-volumes"
+preconditions = { process_not_running = ["Docker", "com.docker.hyperkit", "com.docker.virtualization"] }
+
+[[rule]]
+id = "docker.build_cache"
+adapter = "docker"
+title = "Docker build cache"
+description = "Build cache object set reported by the Docker Desktop daemon."
+subjects = [{ kind = "toolchain_object_set", object_set_id = "docker.build_cache" }]
+os = ">=13.0"
+mechanism = "generated"
+recoverability = "rebuild_time_cost"
+sensitivity = "low"
+evidence = "BuildKit can reconstruct this cache on a later build. SizeTrail reports the daemon category and does not treat it as a host-file delete target."
+fixture_id = "docker-build-cache"
+preconditions = { process_not_running = ["Docker", "com.docker.hyperkit", "com.docker.virtualization"] }

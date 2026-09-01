@@ -1,0 +1,1 @@
+{"rule_id":"docker.build_cache","mechanism":"generated","recoverability":"rebuild_time_cost","sensitivity":"low","expected_object_set_id":"docker.build_cache"}

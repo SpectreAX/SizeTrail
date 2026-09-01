@@ -1,0 +1,1 @@
+{"rule_id":"docker.containers","mechanism":"user_owned","recoverability":"unrecoverable","sensitivity":"high","expected_object_set_id":"docker.containers"}

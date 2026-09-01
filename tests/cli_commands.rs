@@ -22,11 +22,19 @@ fn rules_json_is_the_compiled_toml_rule_set() {
     assert!(output.status.success());
     let rules: Value = serde_json::from_slice(&output.stdout).expect("rules stdout must be JSON");
     let rules = rules.as_array().expect("rules must be an array");
-    assert_eq!(rules.len(), 14);
+    assert_eq!(rules.len(), 18);
     assert!(
-        rules
+        [
+            "docker.virtual_disk",
+            "docker.images",
+            "docker.containers",
+            "docker.volumes",
+            "docker.build_cache",
+        ]
+        .into_iter()
+        .all(|id| rules
             .iter()
-            .any(|rule| rule["id"] == "docker.virtual_disk" && rule["adapter"] == "docker")
+            .any(|rule| rule["id"] == id && rule["adapter"] == "docker"))
     );
     assert!(rules.iter().all(|rule| rule.get("command").is_none()
         && rule["evidence"].as_str().is_some_and(|v| !v.is_empty())));

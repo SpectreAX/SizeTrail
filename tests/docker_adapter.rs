@@ -1,14 +1,15 @@
 #![allow(clippy::disallowed_methods)]
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use sizetrail::adapters::docker::DockerAdapter;
+use sizetrail::adapters::docker::{self, DockerAdapter};
 use sizetrail::adapters::{
     AdapterDegradedReason, AdapterState, InventoryGapReason, ToolchainAdapter,
 };
 use sizetrail::fsx::Root;
-use sizetrail::model::{Advice, MeasurementQuantity, MeasurementValue};
-use sizetrail::policy::PolicyCtx;
+use sizetrail::model::{Advice, FindingSubject, MeasurementQuantity, MeasurementValue};
+use sizetrail::policy::{PolicyCtx, ProbePolicy, ReadOnlyCommand};
 
 #[test]
 fn default_raw_reports_only_host_backing_file_quantities() {
@@ -167,14 +168,20 @@ fn ambiguous_images_are_never_summed_without_a_verified_version() {
     let verified = AdapterState::Ready {
         version: "verified fixture".to_owned(),
     };
-    let selected = adapter.inventory(&mut ctx, &verified);
-    assert_eq!(selected.items.len(), 1);
+    let policies = fixture_policies(SYSTEM_DF_ARGS);
+    let mut ready_ctx = PolicyCtx::for_test(&policies);
+    let selected = adapter.inventory(&mut ready_ctx, &verified);
+    let disk = selected
+        .items
+        .iter()
+        .find(|item| item.rule_id == "docker.virtual_disk")
+        .expect("verified version still selects one host disk");
     assert!(
-        selected.items[0]
-            .subject
+        disk.subject
             .filesystem_path()
             .is_some_and(|path| path.ends_with("/Docker.raw"))
     );
+    assert_eq!(ready_ctx.count(docker::SYSTEM_DF), 1);
 }
 
 #[test]
@@ -230,6 +237,200 @@ fn malformed_current_settings_do_not_fall_through_to_a_guessed_default() {
         inventory.gaps[0].reason,
         InventoryGapReason::InvalidToolOutput
     );
+}
+
+#[test]
+fn ready_summary_emits_four_object_sets_without_summing_or_subtracting() {
+    let fixture = fixture_home();
+    let disk = fixture
+        .path
+        .join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw");
+    sparse_file(&disk, 8 * 1024 * 1024);
+    let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
+    let adapter = DockerAdapter::new(&root, &[]);
+    let policies = fixture_policies(SYSTEM_DF_ARGS);
+    let mut ctx = PolicyCtx::for_test(&policies);
+    let state = AdapterState::Ready {
+        version: "verified fixture".to_owned(),
+    };
+
+    let inventory = adapter.inventory(&mut ctx, &state);
+    let findings = adapter
+        .classify(&inventory)
+        .expect("disk plus daemon rows must classify");
+
+    assert_eq!(ctx.count(docker::SYSTEM_DF), 1);
+    assert_eq!(
+        inventory
+            .items
+            .iter()
+            .map(|item| item.rule_id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "docker.virtual_disk",
+            "docker.images",
+            "docker.containers",
+            "docker.volumes",
+            "docker.build_cache",
+        ])
+    );
+    assert_eq!(
+        findings
+            .iter()
+            .map(|finding| finding.rule_id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "docker.virtual_disk",
+            "docker.images",
+            "docker.containers",
+            "docker.volumes",
+            "docker.build_cache",
+        ])
+    );
+    assert!(
+        inventory
+            .gaps
+            .iter()
+            .any(|gap| gap.reason == InventoryGapReason::DaemonInventoryExcludesInactiveStore)
+    );
+    for finding in findings
+        .iter()
+        .filter(|finding| finding.rule_id != "docker.virtual_disk")
+    {
+        assert!(
+            matches!(
+                finding.subject,
+                FindingSubject::ToolchainObjectSet { ref object_set_id }
+                if object_set_id == &finding.rule_id
+            ),
+            "subject: {:?}",
+            finding.subject
+        );
+        assert_eq!(
+            finding
+                .measurements
+                .iter()
+                .map(|measurement| measurement.quantity)
+                .collect::<Vec<_>>(),
+            [
+                MeasurementQuantity::ObjectCount,
+                MeasurementQuantity::ActiveObjectCount,
+                MeasurementQuantity::DaemonUsed,
+                MeasurementQuantity::DaemonReclaimable,
+            ]
+        );
+        assert!(finding.advice.is_empty());
+        assert!(finding.measurements.iter().all(|measurement| {
+            matches!(
+                measurement.scope.kind,
+                sizetrail::model::MeasurementScopeKind::ObjectSet
+            ) && measurement.scope.id == finding.rule_id
+                && matches!(
+                    measurement.basis,
+                    sizetrail::model::MeasurementBasis::DockerSystemDf
+                )
+                && !matches!(measurement.value, MeasurementValue::IntervalBytes { .. })
+                && !matches!(measurement.value, MeasurementValue::ExactBytes { .. })
+        }));
+    }
+}
+
+#[test]
+fn not_present_never_runs_system_df() {
+    let fixture = fixture_home();
+    let disk = fixture
+        .path
+        .join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw");
+    sparse_file(&disk, 8 * 1024 * 1024);
+    let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
+    let adapter = DockerAdapter::new(&root, &[]);
+    let policies = fixture_policies(SYSTEM_DF_ARGS);
+    let mut ctx = PolicyCtx::for_test(&policies);
+
+    let inventory = adapter.inventory(&mut ctx, &AdapterState::NotPresent);
+
+    assert_eq!(ctx.count(docker::SYSTEM_DF), 0);
+    assert!(
+        inventory
+            .items
+            .iter()
+            .all(|item| item.rule_id == "docker.virtual_disk")
+    );
+    assert!(
+        inventory
+            .gaps
+            .iter()
+            .all(|gap| gap.reason != InventoryGapReason::DaemonInventoryExcludesInactiveStore)
+    );
+}
+
+#[test]
+fn malformed_ready_summary_keeps_the_host_disk_and_does_not_claim_inactive_store() {
+    let fixture = fixture_home();
+    let disk = fixture
+        .path
+        .join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw");
+    sparse_file(&disk, 8 * 1024 * 1024);
+    let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
+    let adapter = DockerAdapter::new(&root, &[]);
+    const MALFORMED_ARGS: &[&str] = &["%s", "not-json\n"];
+    let policies = fixture_policies(MALFORMED_ARGS);
+    let mut ctx = PolicyCtx::for_test(&policies);
+    let state = AdapterState::Ready {
+        version: "verified fixture".to_owned(),
+    };
+
+    let inventory = adapter.inventory(&mut ctx, &state);
+
+    assert_eq!(ctx.count(docker::SYSTEM_DF), 1);
+    assert_eq!(inventory.items.len(), 1);
+    assert_eq!(inventory.items[0].rule_id, "docker.virtual_disk");
+    assert!(
+        inventory
+            .gaps
+            .iter()
+            .any(|gap| gap.reason == InventoryGapReason::InvalidToolOutput)
+    );
+    assert!(
+        inventory
+            .gaps
+            .iter()
+            .all(|gap| gap.reason != InventoryGapReason::DaemonInventoryExcludesInactiveStore)
+    );
+}
+
+const CONTEXT: &str = include_str!("fixtures/docker/context-desktop-linux.json");
+const VERSION_JSON: &str = include_str!("fixtures/docker/version-verified.json");
+const SYSTEM_DF_JSON: &str = include_str!("fixtures/docker/system-df.ndjson");
+const CONTEXT_ARGS: &[&str] = &["%s", CONTEXT];
+const VERSION_ARGS: &[&str] = &["%s", VERSION_JSON];
+const SYSTEM_DF_ARGS: &[&str] = &["%s", SYSTEM_DF_JSON];
+
+fn fixture_policies(df: &'static [&'static str]) -> [ProbePolicy; 3] {
+    [
+        printf_policy(docker::CONTEXT_INSPECT, CONTEXT_ARGS),
+        printf_policy(docker::VERSION, VERSION_ARGS),
+        printf_policy(docker::SYSTEM_DF, df),
+    ]
+}
+
+const fn printf_policy(
+    id: sizetrail::policy::ProbeId,
+    arguments: &'static [&'static str],
+) -> ProbePolicy {
+    ProbePolicy {
+        id,
+        max_calls_per_scan: 1,
+        disable_env: "SIZETRAIL_NO_DOCKER_PROBE_FIXTURE",
+        known_side_effects: &[],
+        command: ReadOnlyCommand {
+            program: "/usr/bin/printf",
+            arguments,
+            environment: &[],
+            remove_environment: &[],
+            timeout_millis: 10_000,
+        },
+    }
 }
 
 struct FixtureHome {

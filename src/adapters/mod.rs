@@ -117,6 +117,7 @@ pub enum InventoryGapReason {
     CaskArtifactOutsidePrefix,
     UnsupportedPathOverride,
     AmbiguousDiskImage,
+    DaemonInventoryExcludesInactiveStore,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -133,6 +134,7 @@ pub enum InventoryStage {
     VolumeSnapshots,
     DockerSettings,
     DockerDiskImage,
+    DockerSystemDf,
 }
 
 impl InventoryStage {
@@ -150,6 +152,7 @@ impl InventoryStage {
             Self::VolumeSnapshots => "volume_snapshots",
             Self::DockerSettings => "docker_settings",
             Self::DockerDiskImage => "docker_disk_image",
+            Self::DockerSystemDf => "docker_system_df",
         }
     }
 }

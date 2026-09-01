@@ -525,6 +525,7 @@ pub enum CoverageGapReason {
     CaskArtifactOutsidePrefix,
     UnsupportedPathOverride,
     AmbiguousDiskImage,
+    DaemonInventoryExcludesInactiveStore,
     ExcludedByUser,
 }
 
