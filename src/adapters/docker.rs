@@ -57,6 +57,14 @@ impl<'a> DockerAdapter<'a> {
             excludes,
         }
     }
+
+    #[must_use]
+    pub fn discover_data_folder(home_root: &'a Root) -> Option<PathBuf> {
+        Self::new(home_root, &[])
+            .configured_data_folder()
+            .ok()
+            .flatten()
+    }
 }
 
 impl ToolchainAdapter for DockerAdapter<'_> {

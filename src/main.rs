@@ -12,6 +12,7 @@ use std::{fs, io};
 
 use clap::{Arg, ArgAction, Command, value_parser};
 use clap_complete::{Shell, generate};
+use sizetrail::adapters::docker::DockerAdapter;
 use sizetrail::adapters::homebrew::{discover_layout, open_prefix_root};
 use sizetrail::capacity;
 use sizetrail::fsx::Root;
@@ -19,8 +20,8 @@ use sizetrail::model::EnvironmentEnvelope;
 use sizetrail::policy::{PolicyCtx, SIDE_EFFECT_REGISTRY};
 use sizetrail::rules::{COMPILED_ADAPTER_IDS, builtin_rules};
 use sizetrail::scan::{
-    excluded_adapter_report, homebrew_report, scan, unmeasurable_adapter_report, xcode_report,
-    xcode_report_with_sink,
+    docker_report, excluded_adapter_report, homebrew_report, scan, unmeasurable_adapter_report,
+    xcode_report, xcode_report_with_sink,
 };
 
 fn command() -> Command {
@@ -149,17 +150,18 @@ fn run() -> Result<u8, String> {
                 .ok_or_else(|| "HOME is unavailable and --root was not supplied".to_owned())?;
             let no_xcode = arguments.get_flag("no-xcode");
             let no_homebrew = arguments.get_flag("no-homebrew");
+            let no_docker = arguments.get_flag("no-docker");
             let json_output = arguments.get_flag("json");
             let requested_excludes = arguments
                 .get_many::<PathBuf>("exclude")
                 .map(|values| values.cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
-            if no_xcode && no_homebrew && !requested_excludes.is_empty() {
+            if no_xcode && no_homebrew && no_docker && !requested_excludes.is_empty() {
                 eprintln!("sizetrail: --exclude matches no enabled scan root");
                 return Ok(2);
             }
             let opened = Root::open(&root);
-            let excludes = if no_xcode && no_homebrew {
+            let excludes = if no_xcode && no_homebrew && no_docker {
                 Vec::new()
             } else if let Ok(scan_root) = opened.as_ref() {
                 match validate_excludes(
@@ -168,6 +170,7 @@ fn run() -> Result<u8, String> {
                     &requested_excludes,
                     !no_xcode,
                     !no_homebrew,
+                    !no_docker,
                     root_override.as_deref(),
                 ) {
                     Ok(excludes) => excludes,
@@ -215,8 +218,15 @@ fn run() -> Result<u8, String> {
             } else {
                 unmeasurable_adapter_report("xcode")
             };
+            let docker = if no_docker {
+                excluded_adapter_report("docker")
+            } else if let Ok(scan_root) = opened.as_ref() {
+                docker_report(scan_root, &mut ctx, &excludes)
+            } else {
+                unmeasurable_adapter_report("docker")
+            };
             if !json_output {
-                for finding in &homebrew.findings {
+                for finding in homebrew.findings.iter().chain(&docker.findings) {
                     println!(
                         "{}\t{}\t{}",
                         finding.id,
@@ -235,7 +245,12 @@ fn run() -> Result<u8, String> {
                     .tool_versions
                     .insert("xcode".to_owned(), version.clone());
             }
-            let document = scan(environment, capacity, vec![homebrew, xcode]);
+            if let Some(version) = &docker.tool_version {
+                environment
+                    .tool_versions
+                    .insert("docker".to_owned(), version.clone());
+            }
+            let document = scan(environment, capacity, vec![homebrew, xcode, docker]);
 
             if json_output {
                 let rendered =
@@ -299,17 +314,18 @@ fn doctor(matches: &clap::ArgMatches, arguments: &clap::ArgMatches) -> Result<u8
         .ok_or_else(|| "HOME is unavailable and --root was not supplied".to_owned())?;
     let no_xcode = arguments.get_flag("no-xcode");
     let no_homebrew = arguments.get_flag("no-homebrew");
+    let no_docker = arguments.get_flag("no-docker");
     let requested_excludes = arguments
         .get_many::<PathBuf>("exclude")
         .map(|values| values.cloned().collect::<Vec<_>>())
         .unwrap_or_default();
-    if no_xcode && no_homebrew && !requested_excludes.is_empty() {
+    if no_xcode && no_homebrew && no_docker && !requested_excludes.is_empty() {
         eprintln!("sizetrail: --exclude matches no enabled scan root");
         return Ok(2);
     }
     let opened = Root::open(&root);
     let root_ready = opened.is_ok();
-    let excludes = if no_xcode && no_homebrew {
+    let excludes = if no_xcode && no_homebrew && no_docker {
         Vec::new()
     } else if let Ok(scan_root) = opened.as_ref() {
         match validate_excludes(
@@ -318,6 +334,7 @@ fn doctor(matches: &clap::ArgMatches, arguments: &clap::ArgMatches) -> Result<u8
             &requested_excludes,
             !no_xcode,
             !no_homebrew,
+            !no_docker,
             root_override.as_deref(),
         ) {
             Ok(excludes) => excludes,
@@ -347,7 +364,17 @@ fn doctor(matches: &clap::ArgMatches, arguments: &clap::ArgMatches) -> Result<u8
     } else {
         unmeasurable_adapter_report("xcode")
     };
-    let ready = root_ready && report_is_ready(&homebrew) && report_is_ready(&xcode);
+    let docker = if no_docker {
+        excluded_adapter_report("docker")
+    } else if let Ok(scan_root) = opened.as_ref() {
+        docker_report(scan_root, &mut ctx, &excludes)
+    } else {
+        unmeasurable_adapter_report("docker")
+    };
+    let ready = root_ready
+        && report_is_ready(&homebrew)
+        && report_is_ready(&xcode)
+        && report_is_ready(&docker);
     let report = serde_json::json!({
         "schema_version": sizetrail::model::SCHEMA_VERSION,
         "tool_version": sizetrail::model::TOOL_VERSION,
@@ -361,6 +388,7 @@ fn doctor(matches: &clap::ArgMatches, arguments: &clap::ArgMatches) -> Result<u8
         })),
         "homebrew": homebrew,
         "xcode": xcode,
+        "docker": docker,
     });
     if arguments.get_flag("json") {
         println!(
@@ -369,12 +397,15 @@ fn doctor(matches: &clap::ArgMatches, arguments: &clap::ArgMatches) -> Result<u8
         );
     } else {
         println!(
-            "root: {}\nhomebrew: {}\nxcode: {}",
+            "root: {}\nhomebrew: {}\nxcode: {}\ndocker: {}",
             report["root"]["status"].as_str().unwrap_or("unmeasurable"),
             report["homebrew"]["status"]
                 .as_str()
                 .unwrap_or("unmeasurable"),
-            report["xcode"]["status"].as_str().unwrap_or("unmeasurable")
+            report["xcode"]["status"].as_str().unwrap_or("unmeasurable"),
+            report["docker"]["status"]
+                .as_str()
+                .unwrap_or("unmeasurable")
         );
     }
     Ok(if ready { 0 } else { 3 })
@@ -465,6 +496,7 @@ fn explain(matches: &clap::ArgMatches, arguments: &clap::ArgMatches) -> Result<u
             match adapter_id {
                 "homebrew" => homebrew_report(&scan_root, &mut ctx, &[], root_override.as_deref()),
                 "xcode" => xcode_report(&scan_root, &mut ctx, &[]),
+                "docker" => docker_report(&scan_root, &mut ctx, &[]),
                 _ => unreachable!("compiled adapter ids are matched exhaustively"),
             }
         }
@@ -578,6 +610,7 @@ fn validate_excludes(
     requested: &[PathBuf],
     xcode_enabled: bool,
     homebrew_enabled: bool,
+    docker_enabled: bool,
     sandbox_root: Option<&Path>,
 ) -> Result<Vec<PathBuf>, String> {
     let layout = homebrew_enabled
@@ -586,6 +619,12 @@ fn validate_excludes(
     let prefix_root = layout
         .as_ref()
         .and_then(|layout| open_prefix_root(layout).ok());
+    let docker_data_folder = docker_enabled
+        .then(|| DockerAdapter::discover_data_folder(root))
+        .flatten();
+    let docker_data_root = docker_data_folder
+        .as_ref()
+        .and_then(|folder| Root::open(folder).ok());
     let mut excludes = Vec::new();
     for input in requested {
         if input
@@ -631,19 +670,25 @@ fn validate_excludes(
             xcode_enabled.then(|| root.path().join("Library/Developer/CoreSimulator")),
             homebrew_enabled.then(|| root.path().join("Library/Caches/Homebrew")),
             homebrew_enabled.then(|| root.path().join("Library/Logs/Homebrew")),
+            docker_enabled.then(|| root.path().join("Library/Containers/com.docker.docker")),
         ];
         let home_match = candidate.starts_with(root.path())
             && home_roots
                 .iter()
                 .flatten()
                 .any(|scan_root| overlaps(&candidate, scan_root));
-        if prefix_owner.is_none() && !home_match {
+        let docker_custom_match = docker_data_folder
+            .as_ref()
+            .is_some_and(|folder| overlaps(&candidate, folder));
+        if prefix_owner.is_none() && !home_match && !docker_custom_match {
             return Err(format!(
                 "exclude matches no enabled scan root: {}",
                 input.display()
             ));
         }
-        let owner = prefix_owner.unwrap_or(root);
+        let owner = prefix_owner
+            .or_else(|| docker_data_root.as_ref().filter(|_| docker_custom_match))
+            .unwrap_or(root);
         match owner.path_exists_without_descending(&candidate) {
             Ok(true) => excludes.push(candidate),
             Ok(false) => return Err(format!("exclude does not exist: {}", input.display())),

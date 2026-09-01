@@ -453,6 +453,96 @@ fn docker_advice_keeps_host_disk_and_user_state_from_being_treated_as_cleanup() 
 }
 
 #[test]
+fn path_exclude_does_not_drop_daemon_object_sets() {
+    let fixture = fixture_home();
+    let disk = fixture
+        .path
+        .join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw");
+    sparse_file(&disk, 8 * 1024 * 1024);
+    let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
+    let excludes = [disk];
+    let adapter = DockerAdapter::new(&root, &excludes);
+    let policies = fixture_policies(SYSTEM_DF_ARGS);
+    let mut ctx = PolicyCtx::for_test(&policies);
+    let inventory = adapter.inventory(
+        &mut ctx,
+        &AdapterState::Ready {
+            version: "verified fixture".to_owned(),
+        },
+    );
+
+    assert_eq!(ctx.count(docker::SYSTEM_DF), 1);
+    assert!(
+        inventory
+            .items
+            .iter()
+            .all(|item| item.rule_id != "docker.virtual_disk")
+    );
+    assert_eq!(
+        inventory
+            .items
+            .iter()
+            .map(|item| item.rule_id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "docker.images",
+            "docker.containers",
+            "docker.volumes",
+            "docker.build_cache",
+        ])
+    );
+}
+
+#[test]
+#[ignore = "records a runner-specific fixture benchmark for publication"]
+fn docker_inventory_fixture_benchmark() {
+    let fixture = fixture_home();
+    let disk = fixture
+        .path
+        .join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw");
+    sparse_file(&disk, 8 * 1024 * 1024);
+    let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
+    let adapter = DockerAdapter::new(&root, &[]);
+    let policies = fixture_policies(SYSTEM_DF_ARGS);
+    let state = AdapterState::Ready {
+        version: "verified fixture".to_owned(),
+    };
+    let mut samples = Vec::new();
+    for _ in 0..5 {
+        let mut ctx = PolicyCtx::for_test(&policies);
+        let started = std::time::Instant::now();
+        let inventory = adapter.inventory(&mut ctx, &state);
+        let elapsed = started.elapsed().as_nanos();
+        assert!(
+            inventory
+                .items
+                .iter()
+                .any(|item| item.rule_id == "docker.virtual_disk")
+        );
+        assert_eq!(
+            inventory
+                .items
+                .iter()
+                .filter(|item| item.rule_id != "docker.virtual_disk")
+                .count(),
+            4
+        );
+        samples.push(elapsed);
+    }
+    samples.sort_unstable();
+    println!(
+        "SIZETRAIL_BENCHMARK_JSON={}",
+        serde_json::json!({
+            "adapter": "docker",
+            "scope": "temp_home_sparse_raw_with_stubbed_system_df",
+            "iterations": samples.len(),
+            "median_wall_nanoseconds": samples[samples.len() / 2],
+            "all_wall_nanoseconds": samples,
+        })
+    );
+}
+
+#[test]
 fn not_present_never_runs_system_df() {
     let fixture = fixture_home();
     let disk = fixture

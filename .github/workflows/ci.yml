@@ -114,6 +114,18 @@ jobs:
           path: artifacts/xcode-fixture-benchmark.json
           if-no-files-found: error
 
+      - name: Record Docker fixture benchmark
+        if: matrix.benchmark
+        run: bash scripts/benchmark-docker-fixture.sh
+
+      - name: Publish Docker fixture benchmark
+        if: matrix.benchmark
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-fixture-benchmark-${{ matrix.runner }}
+          path: artifacts/docker-fixture-benchmark.json
+          if-no-files-found: error
+
       - name: Install dependency policy tools
         if: matrix.policy
         uses: taiki-e/install-action@v2

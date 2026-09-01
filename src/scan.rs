@@ -1,3 +1,4 @@
+use crate::adapters::docker::DockerAdapter;
 use crate::adapters::homebrew::{HomebrewAdapter, Layout, discover_layout, open_prefix_root};
 use crate::adapters::xcode::XcodeAdapter;
 use crate::adapters::{AdapterState, InventoryGapReason, ToolchainAdapter};
@@ -263,6 +264,98 @@ pub fn xcode_report_with_sink(
         findings,
         coverage_gaps,
     }
+}
+
+pub fn docker_report(
+    home_root: &Root,
+    ctx: &mut PolicyCtx<'_>,
+    excludes: &[std::path::PathBuf],
+) -> AdapterReport {
+    let adapter = DockerAdapter::new(home_root, excludes);
+    let state = adapter.probe(ctx);
+    let mut inventory = adapter.inventory(ctx, &state);
+    let findings = match adapter.classify(&inventory) {
+        Ok(findings) => findings,
+        Err(reason) => {
+            inventory
+                .gaps
+                .push(crate::adapters::InventoryGap::diagnostic("docker", reason));
+            Vec::new()
+        }
+    };
+    inventory.gaps.sort_by(|left, right| {
+        left.region
+            .cmp(right.region)
+            .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.reason.cmp(&right.reason))
+    });
+    let mut coverage_gaps = inventory
+        .gaps
+        .into_iter()
+        .enumerate()
+        .map(|(index, gap)| CoverageGap {
+            id: format!("docker.{}.{index}", gap_reason_id(gap.reason)),
+            plane: MeasurementPlane::ToolchainAttribution,
+            region: gap.region.to_owned(),
+            path: gap
+                .path
+                .as_deref()
+                .and_then(|path| crate::model::normalized_report_path(home_root.path(), path).ok()),
+            status: coverage_gap_status(gap.reason),
+            reason: coverage_reason(gap.reason),
+            stage: gap.stage.map(|stage| stage.as_str().to_owned()),
+            errno: gap.errno,
+        })
+        .collect::<Vec<_>>();
+    for (index, path) in excludes.iter().enumerate() {
+        if !docker_exclude_applies(home_root, path) {
+            continue;
+        }
+        coverage_gaps.push(CoverageGap {
+            id: format!("docker.excluded_by_user.{index}"),
+            plane: MeasurementPlane::ToolchainAttribution,
+            region: "docker".to_owned(),
+            path: crate::model::normalized_report_path(home_root.path(), path).ok(),
+            status: RegionStatus::ExcludedByUser,
+            reason: CoverageGapReason::ExcludedByUser,
+            stage: None,
+            errno: None,
+        });
+    }
+    let (status, tool_version) = match state {
+        AdapterState::Ready { version } => (
+            if coverage_gaps
+                .iter()
+                .all(|gap| gap.status != RegionStatus::Unmeasurable)
+            {
+                RegionStatus::Complete
+            } else {
+                RegionStatus::Unmeasurable
+            },
+            Some(version),
+        ),
+        AdapterState::NotPresent => (RegionStatus::NotPresent, None),
+        AdapterState::Degraded {
+            observed_version, ..
+        } => (RegionStatus::Unmeasurable, observed_version),
+    };
+    AdapterReport {
+        id: "docker".to_owned(),
+        status,
+        tool_version,
+        warnings: inventory.warnings,
+        findings,
+        coverage_gaps,
+    }
+}
+
+fn docker_exclude_applies(home_root: &Root, path: &std::path::Path) -> bool {
+    let default_root = home_root
+        .path()
+        .join("Library/Containers/com.docker.docker");
+    path.starts_with(&default_root)
+        || DockerAdapter::discover_data_folder(home_root)
+            .is_some_and(|folder| path.starts_with(&folder))
 }
 
 #[must_use]

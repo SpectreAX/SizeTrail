@@ -97,7 +97,7 @@ fn homebrew_scan_preserves_every_snapshotted_fixture_field() {
     let before = fixture.snapshot().expect("baseline snapshot must succeed");
 
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--root"])
+        .args(["scan", "--json", "--no-xcode", "--no-docker", "--root"])
         .arg(&fixture.home)
         .envs(fixture.environment())
         .output()

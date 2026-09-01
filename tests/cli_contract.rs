@@ -121,7 +121,7 @@ fn a_cask_moved_outside_the_prefix_does_not_make_the_scan_incomplete() {
         .expect("staged app link must be created");
 
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--root"])
+        .args(["scan", "--json", "--no-xcode", "--no-docker", "--root"])
         .arg(fixture.path())
         .output()
         .expect("Homebrew cask scan must run");
@@ -170,7 +170,7 @@ fn a_cask_moved_outside_the_prefix_does_not_make_the_scan_incomplete() {
 fn a_missing_homebrew_cache_root_is_a_declared_boundary_not_an_incomplete_scan() {
     let fixture = homebrew_fixture();
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--root"])
+        .args(["scan", "--json", "--no-xcode", "--no-docker", "--root"])
         .arg(fixture.path())
         .output()
         .expect("Homebrew scan without cache root must run");
@@ -272,7 +272,14 @@ fn the_binary_reports_its_build_version_on_the_cli_and_in_json() {
 fn no_homebrew_is_an_explicit_successful_exclusion() {
     let fixture = tempfile::tempdir().expect("fixture root must be created");
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--no-homebrew", "--root"])
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-homebrew",
+            "--no-docker",
+            "--root",
+        ])
         .arg(fixture.path())
         .output()
         .expect("excluded scan must run");
@@ -293,7 +300,7 @@ fn no_homebrew_is_an_explicit_successful_exclusion() {
 fn root_fixture_discovers_homebrew_without_running_brew() {
     let fixture = homebrew_fixture();
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--root"])
+        .args(["scan", "--json", "--no-xcode", "--no-docker", "--root"])
         .arg(fixture.path())
         .output()
         .expect("Homebrew fixture scan must run");
@@ -330,7 +337,7 @@ fn root_fixture_discovers_homebrew_without_running_brew() {
 fn live_explain_rescans_only_the_homebrew_owner() {
     let fixture = homebrew_fixture();
     let scan = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--root"])
+        .args(["scan", "--json", "--no-xcode", "--no-docker", "--root"])
         .arg(fixture.path())
         .output()
         .expect("Homebrew fixture scan must run");
@@ -363,7 +370,7 @@ fn exact_homebrew_prefix_exclusion_is_applied_before_inventory() {
     let fixture = homebrew_fixture();
     let keg = "/opt/homebrew/Cellar/example/1.0";
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--exclude"])
+        .args(["scan", "--json", "--no-xcode", "--no-docker", "--exclude"])
         .arg(keg)
         .arg("--root")
         .arg(fixture.path())
@@ -401,7 +408,14 @@ fn exact_homebrew_prefix_exclusion_is_applied_before_inventory() {
 fn doctor_reports_homebrew_user_exclusion() {
     let fixture = tempfile::tempdir().expect("fixture root must be created");
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["doctor", "--json", "--no-xcode", "--no-homebrew", "--root"])
+        .args([
+            "doctor",
+            "--json",
+            "--no-xcode",
+            "--no-homebrew",
+            "--no-docker",
+            "--root",
+        ])
         .arg(fixture.path())
         .output()
         .expect("doctor must run");
@@ -409,4 +423,232 @@ fn doctor_reports_homebrew_user_exclusion() {
     assert!(output.status.success());
     let document: Value = serde_json::from_slice(&output.stdout).expect("doctor must emit JSON");
     assert_eq!(document["homebrew"]["status"], "excluded_by_user");
+}
+
+fn write_default_docker_raw(root: &std::path::Path) -> std::path::PathBuf {
+    let disk = root.join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw");
+    write_fixture(&disk, "");
+    disk
+}
+
+#[test]
+fn no_docker_is_an_explicit_successful_exclusion() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    let output = cargo_bin_cmd!("sizetrail")
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-homebrew",
+            "--no-docker",
+            "--root",
+        ])
+        .arg(fixture.path())
+        .output()
+        .expect("excluded Docker scan must run");
+
+    assert_eq!(output.status.code(), Some(0));
+    let document: Value =
+        serde_json::from_slice(&output.stdout).expect("scan must emit one JSON document");
+    assert!(
+        document["payload"]["regions"]
+            .as_array()
+            .expect("regions must be an array")
+            .iter()
+            .any(|region| region["id"] == "docker" && region["status"] == "excluded_by_user")
+    );
+}
+
+#[test]
+fn doctor_reports_docker_user_exclusion() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    let output = cargo_bin_cmd!("sizetrail")
+        .args([
+            "doctor",
+            "--json",
+            "--no-xcode",
+            "--no-homebrew",
+            "--no-docker",
+            "--root",
+        ])
+        .arg(fixture.path())
+        .output()
+        .expect("doctor must run");
+
+    assert!(output.status.success());
+    let document: Value = serde_json::from_slice(&output.stdout).expect("doctor must emit JSON");
+    assert_eq!(document["docker"]["status"], "excluded_by_user");
+}
+
+#[test]
+fn docker_virtual_disk_is_measured_without_the_daemon() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    write_default_docker_raw(fixture.path());
+    let output = cargo_bin_cmd!("sizetrail")
+        .args(["scan", "--json", "--no-xcode", "--no-homebrew", "--root"])
+        .arg(fixture.path())
+        .output()
+        .expect("Docker disk scan must run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: Value =
+        serde_json::from_slice(&output.stdout).expect("scan must emit one JSON document");
+    assert_eq!(
+        document["payload"]["regions"]
+            .as_array()
+            .expect("regions")
+            .iter()
+            .find(|region| region["id"] == "docker")
+            .expect("docker region")["status"],
+        "not_present"
+    );
+    assert!(
+        document["payload"]["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| finding["rule_id"] == "docker.virtual_disk")
+    );
+}
+
+#[test]
+fn exact_docker_disk_exclusion_is_applied_before_inventory() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    let disk = write_default_docker_raw(fixture.path());
+    let output = cargo_bin_cmd!("sizetrail")
+        .args(["scan", "--json", "--no-xcode", "--no-homebrew", "--exclude"])
+        .arg(&disk)
+        .arg("--root")
+        .arg(fixture.path())
+        .output()
+        .expect("Docker exclusion scan must run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: Value =
+        serde_json::from_slice(&output.stdout).expect("scan must emit one JSON document");
+    assert!(
+        document["payload"]["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .all(|finding| finding["rule_id"] != "docker.virtual_disk")
+    );
+    assert!(
+        document["payload"]["coverage_gaps"]
+            .as_array()
+            .expect("coverage gaps")
+            .iter()
+            .any(|gap| gap["region"] == "docker" && gap["reason"] == "excluded_by_user")
+    );
+}
+
+#[test]
+fn exact_custom_docker_data_folder_exclusion_is_applied_before_inventory() {
+    let temporary = tempfile::tempdir().expect("fixture container must be created");
+    let home = temporary.path().join("home");
+    std::fs::create_dir(&home).expect("fixture HOME must be created");
+    let home = std::fs::canonicalize(home).expect("fixture HOME must canonicalize");
+    let data_folder = temporary.path().join("DockerData");
+    write_fixture(&data_folder.join("Docker.raw"), "");
+    let data_folder = std::fs::canonicalize(&data_folder).expect("data folder must canonicalize");
+    let physical_disk = data_folder.join("Docker.raw");
+    write_fixture(
+        &home.join("Library/Group Containers/group.com.docker/settings-store.json"),
+        &serde_json::json!({"DataFolder": data_folder}).to_string(),
+    );
+    let output = cargo_bin_cmd!("sizetrail")
+        .args(["scan", "--json", "--no-xcode", "--no-homebrew", "--exclude"])
+        .arg(&physical_disk)
+        .arg("--root")
+        .arg(&home)
+        .output()
+        .expect("custom DataFolder exclusion scan must run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: Value =
+        serde_json::from_slice(&output.stdout).expect("scan must emit one JSON document");
+    assert!(
+        document["payload"]["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .all(|finding| finding["rule_id"] != "docker.virtual_disk")
+    );
+    assert!(
+        document["payload"]["coverage_gaps"]
+            .as_array()
+            .expect("coverage gaps")
+            .iter()
+            .any(|gap| gap["region"] == "docker" && gap["reason"] == "excluded_by_user")
+    );
+}
+
+#[test]
+fn live_explain_rescans_only_the_docker_owner() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    write_default_docker_raw(fixture.path());
+    let scan = cargo_bin_cmd!("sizetrail")
+        .args(["scan", "--json", "--no-xcode", "--no-homebrew", "--root"])
+        .arg(fixture.path())
+        .output()
+        .expect("Docker disk scan must run");
+    let document: Value =
+        serde_json::from_slice(&scan.stdout).expect("scan must emit one JSON document");
+    let id = document["payload"]["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .find(|finding| finding["rule_id"] == "docker.virtual_disk")
+        .and_then(|finding| finding["id"].as_str())
+        .expect("virtual disk finding must have an id");
+
+    let explain = cargo_bin_cmd!("sizetrail")
+        .args(["explain", id, "--json", "--root"])
+        .arg(fixture.path())
+        .env("SIZETRAIL_NO_XCODE_PROBE", "1")
+        .output()
+        .expect("live explain must run");
+
+    assert!(explain.status.success());
+    let explanation: Value =
+        serde_json::from_slice(&explain.stdout).expect("explain must emit JSON");
+    assert_eq!(explanation["provenance"], "live");
+    assert_eq!(explanation["finding"]["id"], id);
+    assert_eq!(explanation["finding"]["rule_id"], "docker.virtual_disk");
+}
+
+#[test]
+fn live_explain_path_rejects_a_docker_object_set() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    let report = fixture.path().join("report.json");
+    std::fs::write(
+        &report,
+        r#"{"schema_version":"0.1.0-unstable","environment":{"generated_at_unix_seconds":1800000000},"payload":{"findings":[{"id":"f1:docker:0123456789abcdef","subject":{"kind":"toolchain_object_set","object_set_id":"docker.images"}}]}}"#,
+    )
+    .expect("object-set report must be written");
+    let output = cargo_bin_cmd!("sizetrail")
+        .args(["explain", "f1:docker:0123456789abcdef", "--path", "--from"])
+        .arg(&report)
+        .output()
+        .expect("object-set explain must run");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("finding has no filesystem path"));
 }

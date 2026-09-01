@@ -824,7 +824,7 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 
 **通道覆盖矩阵是 P2 起的常设交付物。** P2 起每个阶段及阶段内小节完成前都必须基于阶段后代码重新推导矩阵，并为本次新开的通道增加行，不能只沿用上一版结论。P2 至少逐项列出 `fsx/sys.rs` 内每个 `extern` 声明，以及读操作诱发的系统代写；P3 至少逐项列出每个外部命令、子进程与未沙箱化 daemon 的状态变化通道；P4 继续加入每条 `simctl`、规则解析、显式报告文件读取、completion 与新增依赖的运行时通道；P5 逐小节加入 Docker CLI、配置读取、VM metadata 与 daemon IPC。
 
-### 12.1 当前 P5.4 通道覆盖矩阵
+### 12.1 当前 P5.5 通道覆盖矩阵
 
 `静态`包含 crate-root forbid、豁免边界、Clippy 清单锁；`符号锁`包含 extern 精确集合、无直接 `libc`、无 build script、禁止 inline asm/dynamic lookup；`运行时`包含 TreeSnapshot、高价值路径兜底与 deny-write sandbox；`专用`是本行的行为/差分 fixture。`—` 表示该层不覆盖，不能据此扩张安全声明。
 
@@ -864,6 +864,12 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | Docker daemon 四类 object-set inventory | 只消费已解析的 `system df` 行；不新增 Command | — | adapter fixture；产品 sandbox 尚未接线 Docker | 仅 Ready 时 1 次 `system df` | 映射为 images/containers/volumes/build cache；counts 为 vendor 整数，size/reclaimable 为 `rounded_bytes` + `basis=docker_system_df`。四类不得求和，也不得从 host allocated 相减。NotPresent/unknown version 不调用 `system df`，畸形输出保留宿主磁盘 |
 | Docker inactive store after Desktop store-switch | — | — | adapter fixture | — | 成功 daemon 报告固定携带 `daemon_inventory_excludes_inactive_store`（`declared_scope_boundary`）。失败的 summary 不假装覆盖了 inactive store |
 | Docker command / Reveal advice | 只渲染 stdout；永不进入 probe runner | — | adapter fixture | 0 | 固定 `--context desktop-linux`；`image prune` / `builder prune` / `ps -a` / `system prune --volumes`。无 `--force` / `--yes` / 管道。raw/qcow2 只 Reveal 且写明不是可删除目标；`system prune --volumes` 必须写明会删 stopped containers、未使用对象与 anonymous volumes，且不是推荐的一键下一步 |
+| Docker `scan` / `doctor` / `--no-docker` | 只读 CLI；adapter 经 `docker_report` | — | CLI fixture + deny-write sandbox | 生产 probe 受 registry 限制 | `--no-docker` 为 `excluded_by_user`、退出 0。无 Docker.app 为 `not_present`，不阻断宿主磁盘 finding |
+| Docker live `explain` 与 `--from` / `--path` | `--from` 零 probe；live 只重探 docker owner | — | CLI fixture | live 仅 docker probe 闭集 | object-set `--path` 明确失败；filesystem subject 保持既有路径输出 |
+| Docker `--exclude` 默认与自定义 disk Root | 校验后在 inventory/probe 计量前生效 | `path_exists_without_descending` | default/custom DataFolder fixtures | — | 覆盖 `~/Library/Containers/com.docker.docker` 与 settings 发现的 DataFolder。object-set 不接受路径 exclude |
+| Docker sandbox 关 probe 仍计量 raw | `SIZETRAIL_NO_DOCKER_PROBE` | — | 产品 deny-write sandbox | 0 | sandbox HOME 放入 `Docker.raw` 并断言 finding 出现；三条 CLI 调用为 0 |
+| Docker Desktop 真机验收 | 维护者机器；hosted runner 无 Desktop | — | `#[ignore]` real-environment 测试 | 真机才跑 | **不得**把 hosted `not_present` 写成正例。记录 Desktop/CLI/Engine/API 与 socket 由维护者执行，不在本小节发布数字 |
+| Docker fixture benchmark | stubbed `system df` + sparse raw | — | ignored test + runner artifact | 0 | 只发布 runner+fixture 原始墙钟；不推广 |
 | Docker CLI 诱发 daemon / Resource Saver 状态变化 | — | — | 不覆盖 daemon | 是（只限制调用次数） | **未覆盖 daemon 写**；version 可能唤醒 Resource Saver，system-df 还会遍历 daemon storage；已登记、无自动重试、可由 `SIZETRAIL_NO_DOCKER_PROBE` 关闭 |
 | Docker Desktop settings 读取 | safe read 只在 HOME `Root::measure_object` 与 dataless 检查后执行 | `getattrlist` 精确符号集 | P5.2 fixture；产品 sandbox 尚未接线 Docker | — | current `settings-store.json/DataFolder` 与 legacy `settings.json/dataFolder` 分开锁定；值只接受规范化绝对目录。当前文件畸形时不回退猜默认路径 |
 | Docker 自定义 DataFolder 独立 `Root` | safe 路径解析后只走 `Root` API | 与 HOME Root 相同的 FFI 精确集合 | HOME 外 DataFolder fixture；产品 sandbox 尚未接线 Docker | — | external fixture 证明不借 HOME Root 越界；Root 初始化失败只形成 typed gap，不与 HOME 或 daemon 数字求和 |

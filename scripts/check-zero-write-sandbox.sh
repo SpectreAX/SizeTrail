@@ -21,12 +21,14 @@ trap cleanup EXIT
 test -x "$sandbox"
 mkdir -p \
   "$probe_root/home" \
+  "$probe_root/home/Library/Containers/com.docker.docker/Data/vms/0/data" \
   "$probe_root/tmp" \
   "$probe_root/xdg/cache" \
   "$probe_root/xdg/config" \
   "$probe_root/xdg/data" \
   "$probe_root/xdg/state" \
   "$probe_root/xdg/runtime"
+: >"$probe_root/home/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw"
 
 environment=(
   "HOME=$probe_root/home"
@@ -40,6 +42,7 @@ environment=(
   "XDG_STATE_HOME=$probe_root/xdg/state"
   "XDG_RUNTIME_DIR=$probe_root/xdg/runtime"
   "SIZETRAIL_NO_XCODE_PROBE=1"
+  "SIZETRAIL_NO_DOCKER_PROBE=1"
 )
 
 run_token="sizetrail-zero-write-${GITHUB_RUN_ID:-local}-$$-$RANDOM"
@@ -162,6 +165,7 @@ run_product scan scan --json --root "$probe_root/home"
 require_status scan 0 3
 require_output scan '"schema_version":"0.1.0-unstable"'
 require_output scan '"id":"capacity","status":"complete"'
+require_output scan '"rule_id":"docker.virtual_disk"'
 
 # The probe kill-switch leaves the Xcode region applicable but unmeasured, which is exit 3 by
 # Q21 — semantically distinct from the `--no-xcode` exclusion that exits 0.

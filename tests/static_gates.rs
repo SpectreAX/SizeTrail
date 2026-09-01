@@ -535,8 +535,10 @@ const CLI_SURFACE_FIXTURE: &str = r##"
 #include <string.h>
 
 int main(int argc, char **argv) {
-    const char *gate = getenv("SIZETRAIL_NO_XCODE_PROBE");
-    if (gate == NULL || strcmp(gate, "1") != 0) {
+    const char *xcode_gate = getenv("SIZETRAIL_NO_XCODE_PROBE");
+    const char *docker_gate = getenv("SIZETRAIL_NO_DOCKER_PROBE");
+    if (xcode_gate == NULL || strcmp(xcode_gate, "1") != 0
+        || docker_gate == NULL || strcmp(docker_gate, "1") != 0) {
         return 42;
     }
 
@@ -544,7 +546,8 @@ int main(int argc, char **argv) {
 
     if (strcmp(command, "scan") == 0) {
         puts("{\"schema_version\":\"0.1.0-unstable\",\"payload\":"
-             "{\"regions\":[{\"id\":\"capacity\",\"status\":\"complete\"}]}}");
+             "{\"regions\":[{\"id\":\"capacity\",\"status\":\"complete\"}],"
+             "\"findings\":[{\"rule_id\":\"docker.virtual_disk\"}]}}");
         return 0;
     }
     if (strcmp(command, "doctor") == 0) {
