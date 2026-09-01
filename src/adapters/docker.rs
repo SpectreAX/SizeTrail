@@ -13,10 +13,10 @@ use crate::adapters::{
 };
 use crate::fsx::{Root, RootError};
 use crate::model::{
-    Advice, Finding, FindingSubject, Measurement, MeasurementBasis, MeasurementCoverage,
-    MeasurementCoverageStatus, MeasurementPlane, MeasurementQuantity, MeasurementScope,
-    MeasurementScopeKind, MeasurementValue, RevealAdvice, finding_id, normalize_findings,
-    normalized_report_path, rounded_bytes,
+    Advice, AdviceImpact, CommandAdvice, Finding, FindingSubject, Measurement, MeasurementBasis,
+    MeasurementCoverage, MeasurementCoverageStatus, MeasurementPlane, MeasurementQuantity,
+    MeasurementScope, MeasurementScopeKind, MeasurementValue, RevealAdvice, finding_id,
+    normalize_findings, normalized_report_path, rounded_bytes,
 };
 use crate::policy::{
     DOCKER_CONTEXT_INSPECT, DOCKER_SYSTEM_DF, DOCKER_VERSION, PolicyCtx, PolicyError, ProbeId,
@@ -117,15 +117,41 @@ impl ToolchainAdapter for DockerAdapter<'_> {
     }
 
     fn advise(&self, finding: &Finding) -> Vec<Advice> {
-        finding
-            .subject
-            .filesystem_path()
-            .map_or_else(Vec::new, |path| {
-                vec![Advice::Reveal(RevealAdvice {
-                    normalized_path: path.to_owned(),
-                    recovery_semantics: "This host VM disk is not a safe deletion target. Deleting it destroys images, containers, and volumes together. SizeTrail only reveals the path.".to_owned(),
-                })]
-            })
+        match finding.rule_id.as_str() {
+            "docker.images" => vec![Advice::Command(CommandAdvice {
+                display_command: "docker --context desktop-linux image prune".to_owned(),
+                impact: AdviceImpact::Destructive,
+                explanation: "This vendor command removes dangling unused images. The vendor does not provide a reliable preview.".to_owned(),
+                reliable_preview_available: false,
+            })],
+            "docker.build_cache" => vec![Advice::Command(CommandAdvice {
+                display_command: "docker --context desktop-linux builder prune".to_owned(),
+                impact: AdviceImpact::Destructive,
+                explanation: "This vendor command removes unused BuildKit cache that a later build can reconstruct. The vendor does not provide a reliable preview.".to_owned(),
+                reliable_preview_available: false,
+            })],
+            "docker.containers" => vec![Advice::Command(CommandAdvice {
+                display_command: "docker --context desktop-linux ps -a".to_owned(),
+                impact: AdviceImpact::Inspect,
+                explanation: "Inspect the daemon container list. SizeTrail does not suggest a prune or file-delete command because containers hold writable user state.".to_owned(),
+                reliable_preview_available: true,
+            })],
+            "docker.volumes" => vec![Advice::Command(CommandAdvice {
+                display_command: "docker --context desktop-linux system prune --volumes".to_owned(),
+                impact: AdviceImpact::Destructive,
+                explanation: "This vendor command deletes stopped containers, unused networks, unused images, unused build cache, and unused anonymous volumes. It is not a recommended one-click next step. The vendor does not provide a reliable preview.".to_owned(),
+                reliable_preview_available: false,
+            })],
+            _ => finding
+                .subject
+                .filesystem_path()
+                .map_or_else(Vec::new, |path| {
+                    vec![Advice::Reveal(RevealAdvice {
+                        normalized_path: path.to_owned(),
+                        recovery_semantics: "This host VM disk is not a safe deletion target. Deleting it destroys images, containers, and volumes together. SizeTrail only reveals the path.".to_owned(),
+                    })]
+                }),
+        }
     }
 }
 

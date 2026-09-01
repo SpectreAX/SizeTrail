@@ -8,7 +8,9 @@ use sizetrail::adapters::{
     AdapterDegradedReason, AdapterState, InventoryGapReason, ToolchainAdapter,
 };
 use sizetrail::fsx::Root;
-use sizetrail::model::{Advice, FindingSubject, MeasurementQuantity, MeasurementValue};
+use sizetrail::model::{
+    Advice, AdviceImpact, FindingSubject, MeasurementQuantity, MeasurementValue,
+};
 use sizetrail::policy::{PolicyCtx, ProbePolicy, ReadOnlyCommand};
 
 #[test]
@@ -319,7 +321,6 @@ fn ready_summary_emits_four_object_sets_without_summing_or_subtracting() {
                 MeasurementQuantity::DaemonReclaimable,
             ]
         );
-        assert!(finding.advice.is_empty());
         assert!(finding.measurements.iter().all(|measurement| {
             matches!(
                 measurement.scope.kind,
@@ -333,6 +334,122 @@ fn ready_summary_emits_four_object_sets_without_summing_or_subtracting() {
                 && !matches!(measurement.value, MeasurementValue::ExactBytes { .. })
         }));
     }
+}
+
+#[test]
+fn docker_advice_keeps_host_disk_and_user_state_from_being_treated_as_cleanup() {
+    let fixture = fixture_home();
+    let disk = fixture
+        .path
+        .join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw");
+    sparse_file(&disk, 8 * 1024 * 1024);
+    let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
+    let adapter = DockerAdapter::new(&root, &[]);
+    let policies = fixture_policies(SYSTEM_DF_ARGS);
+    let mut ctx = PolicyCtx::for_test(&policies);
+    let findings = adapter
+        .classify(&adapter.inventory(
+            &mut ctx,
+            &AdapterState::Ready {
+                version: "verified fixture".to_owned(),
+            },
+        ))
+        .expect("classified Docker findings must exist");
+    let rendered = serde_json::to_string(
+        &findings
+            .iter()
+            .flat_map(|finding| &finding.advice)
+            .collect::<Vec<_>>(),
+    )
+    .expect("advice must serialize");
+    for forbidden in ["--force", "--yes", "|", "sudo "] {
+        assert!(
+            !rendered.contains(forbidden),
+            "compiled advice contains forbidden input: {forbidden}"
+        );
+    }
+
+    let disk = findings
+        .iter()
+        .find(|finding| finding.rule_id == "docker.virtual_disk")
+        .expect("virtual disk finding");
+    assert!(
+        matches!(
+            disk.advice.as_slice(),
+            [Advice::Reveal(reveal)]
+            if reveal.normalized_path.ends_with("Docker.raw")
+                && reveal.recovery_semantics.contains("safe deletion target")
+        ),
+        "disk advice: {:?}",
+        disk.advice
+    );
+
+    let images = findings
+        .iter()
+        .find(|finding| finding.rule_id == "docker.images")
+        .expect("images finding");
+    assert!(matches!(
+        images.advice.as_slice(),
+        [Advice::Command(command)]
+        if command.display_command == "docker --context desktop-linux image prune"
+            && matches!(command.impact, AdviceImpact::Destructive)
+            && !command.reliable_preview_available
+            && command.explanation.contains("does not provide a reliable preview")
+    ));
+
+    let cache = findings
+        .iter()
+        .find(|finding| finding.rule_id == "docker.build_cache")
+        .expect("build cache finding");
+    assert!(matches!(
+        cache.advice.as_slice(),
+        [Advice::Command(command)]
+        if command.display_command == "docker --context desktop-linux builder prune"
+            && matches!(command.impact, AdviceImpact::Destructive)
+            && !command.reliable_preview_available
+    ));
+
+    let containers = findings
+        .iter()
+        .find(|finding| finding.rule_id == "docker.containers")
+        .expect("containers finding");
+    assert!(matches!(
+        containers.advice.as_slice(),
+        [Advice::Command(command)]
+        if command.display_command == "docker --context desktop-linux ps -a"
+            && matches!(command.impact, AdviceImpact::Inspect)
+            && command.reliable_preview_available
+            && command.explanation.contains("does not suggest a prune")
+    ));
+
+    let volumes = findings
+        .iter()
+        .find(|finding| finding.rule_id == "docker.volumes")
+        .expect("volumes finding");
+    assert!(
+        matches!(
+            volumes.advice.as_slice(),
+            [Advice::Command(command)]
+            if command.display_command == "docker --context desktop-linux system prune --volumes"
+                && matches!(command.impact, AdviceImpact::Destructive)
+                && !command.reliable_preview_available
+                && command.explanation.contains("stopped containers")
+                && command.explanation.contains("anonymous volumes")
+                && command.explanation.contains("not a recommended one-click next step")
+        ),
+        "volumes advice: {:?}",
+        volumes.advice
+    );
+
+    assert!(
+        findings
+            .iter()
+            .filter(|finding| finding.rule_id != "docker.virtual_disk")
+            .all(|finding| finding
+                .advice
+                .iter()
+                .all(|advice| !matches!(advice, Advice::Reveal(_))))
+    );
 }
 
 #[test]
