@@ -21,14 +21,14 @@ trap cleanup EXIT
 test -x "$sandbox"
 mkdir -p \
   "$probe_root/home" \
-  "$probe_root/home/Library/Containers/com.docker.docker/Data/vms/0/data" \
+  "$probe_root/home/Library/Group Containers/HUAQ24HBR6.dev.orbstack/data" \
   "$probe_root/tmp" \
   "$probe_root/xdg/cache" \
   "$probe_root/xdg/config" \
   "$probe_root/xdg/data" \
   "$probe_root/xdg/state" \
   "$probe_root/xdg/runtime"
-: >"$probe_root/home/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw"
+: >"$probe_root/home/Library/Group Containers/HUAQ24HBR6.dev.orbstack/data/data.img.raw"
 
 environment=(
   "HOME=$probe_root/home"

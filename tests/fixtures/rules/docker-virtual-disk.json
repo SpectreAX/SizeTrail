@@ -1,1 +1,1 @@
-{"rule_id":"docker.virtual_disk","mechanism":"vendor_managed","recoverability":"unrecoverable","sensitivity":"high","expected_path":"~/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw"}
+{"rule_id":"docker.virtual_disk","mechanism":"vendor_managed","recoverability":"unrecoverable","sensitivity":"high","expected_path":"~/Library/Group Containers/HUAQ24HBR6.dev.orbstack/data/data.img.raw"}

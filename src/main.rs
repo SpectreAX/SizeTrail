@@ -12,7 +12,7 @@ use std::{fs, io};
 
 use clap::{Arg, ArgAction, Command, value_parser};
 use clap_complete::{Shell, generate};
-use sizetrail::adapters::docker::DockerAdapter;
+use sizetrail::adapters::docker::{DEFAULT_STORE_ROOT, DockerAdapter};
 use sizetrail::adapters::homebrew::{discover_layout, open_prefix_root};
 use sizetrail::capacity;
 use sizetrail::fsx::Root;
@@ -670,7 +670,7 @@ fn validate_excludes(
             xcode_enabled.then(|| root.path().join("Library/Developer/CoreSimulator")),
             homebrew_enabled.then(|| root.path().join("Library/Caches/Homebrew")),
             homebrew_enabled.then(|| root.path().join("Library/Logs/Homebrew")),
-            docker_enabled.then(|| root.path().join("Library/Containers/com.docker.docker")),
+            docker_enabled.then(|| root.path().join(DEFAULT_STORE_ROOT)),
         ];
         let home_match = candidate.starts_with(root.path())
             && home_roots

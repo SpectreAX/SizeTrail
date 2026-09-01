@@ -63,7 +63,7 @@ const XCODE_REMOVED_ENVIRONMENT: &[&str] = &[
 const SIMCTL_SIDE_EFFECTS: &[&str] = &["simctl_may_start_or_connect_coresimulator_services"];
 const CORE_SIMULATOR_BINARY: &str =
     "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simctl";
-const DOCKER_BINARY: &str = "/Applications/Docker.app/Contents/Resources/bin/docker";
+const DOCKER_BINARY: &str = "/Applications/OrbStack.app/Contents/MacOS/xbin/docker";
 const DOCKER_PROBE_ENVIRONMENT: &[(&str, &str)] = &[
     ("DOCKER_CLI_HOOKS", "false"),
     ("LANG", "C"),
@@ -79,9 +79,9 @@ const DOCKER_REMOVED_ENVIRONMENT: &[&str] = &[
     "DOCKER_TLS",
     "DOCKER_TLS_VERIFY",
 ];
-const DOCKER_VERSION_SIDE_EFFECTS: &[&str] = &["docker_may_wake_resource_saver"];
+const DOCKER_VERSION_SIDE_EFFECTS: &[&str] = &["orbstack_may_wake_paused_vm"];
 const DOCKER_SYSTEM_DF_SIDE_EFFECTS: &[&str] = &[
-    "docker_may_wake_resource_saver",
+    "orbstack_may_wake_paused_vm",
     "docker_system_df_traverses_daemon_storage",
 ];
 
@@ -175,7 +175,7 @@ pub const SIDE_EFFECT_REGISTRY: &[ProbePolicy] = &[
         known_side_effects: &["docker_cli_configuration_read"],
         command: ReadOnlyCommand {
             program: DOCKER_BINARY,
-            arguments: &["context", "inspect", "desktop-linux", "--format", "json"],
+            arguments: &["context", "inspect", "orbstack", "--format", "json"],
             environment: DOCKER_PROBE_ENVIRONMENT,
             remove_environment: DOCKER_REMOVED_ENVIRONMENT,
             timeout_millis: 10_000,
@@ -188,7 +188,7 @@ pub const SIDE_EFFECT_REGISTRY: &[ProbePolicy] = &[
         known_side_effects: DOCKER_VERSION_SIDE_EFFECTS,
         command: ReadOnlyCommand {
             program: DOCKER_BINARY,
-            arguments: &["--context", "desktop-linux", "version", "--format", "json"],
+            arguments: &["--context", "orbstack", "version", "--format", "json"],
             environment: DOCKER_PROBE_ENVIRONMENT,
             remove_environment: DOCKER_REMOVED_ENVIRONMENT,
             timeout_millis: 15_000,
@@ -201,14 +201,7 @@ pub const SIDE_EFFECT_REGISTRY: &[ProbePolicy] = &[
         known_side_effects: DOCKER_SYSTEM_DF_SIDE_EFFECTS,
         command: ReadOnlyCommand {
             program: DOCKER_BINARY,
-            arguments: &[
-                "--context",
-                "desktop-linux",
-                "system",
-                "df",
-                "--format",
-                "json",
-            ],
+            arguments: &["--context", "orbstack", "system", "df", "--format", "json"],
             environment: DOCKER_PROBE_ENVIRONMENT,
             remove_environment: DOCKER_REMOVED_ENVIRONMENT,
             timeout_millis: 120_000,
@@ -515,22 +508,15 @@ mod tests {
         assert_eq!(SIDE_EFFECT_REGISTRY[8].id, DOCKER_SYSTEM_DF);
         assert_eq!(
             SIDE_EFFECT_REGISTRY[6].command.arguments,
-            ["context", "inspect", "desktop-linux", "--format", "json"]
+            ["context", "inspect", "orbstack", "--format", "json"]
         );
         assert_eq!(
             SIDE_EFFECT_REGISTRY[7].command.arguments,
-            ["--context", "desktop-linux", "version", "--format", "json"]
+            ["--context", "orbstack", "version", "--format", "json"]
         );
         assert_eq!(
             SIDE_EFFECT_REGISTRY[8].command.arguments,
-            [
-                "--context",
-                "desktop-linux",
-                "system",
-                "df",
-                "--format",
-                "json"
-            ]
+            ["--context", "orbstack", "system", "df", "--format", "json"]
         );
         assert_eq!(SIDE_EFFECT_REGISTRY[6].command.timeout_millis, 10_000);
         assert_eq!(SIDE_EFFECT_REGISTRY[7].command.timeout_millis, 15_000);
@@ -550,12 +536,12 @@ mod tests {
         );
         assert_eq!(
             SIDE_EFFECT_REGISTRY[7].known_side_effects,
-            ["docker_may_wake_resource_saver"]
+            ["orbstack_may_wake_paused_vm"]
         );
         assert_eq!(
             SIDE_EFFECT_REGISTRY[8].known_side_effects,
             [
-                "docker_may_wake_resource_saver",
+                "orbstack_may_wake_paused_vm",
                 "docker_system_df_traverses_daemon_storage"
             ]
         );

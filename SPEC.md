@@ -17,6 +17,7 @@
 | v0.1 范围 | Xcode/CoreSimulator 单 adapter，schema 明确不稳定（Q29） |
 | v0.2 范围 | 追加 Homebrew adapter |
 | v1.0 范围 | 追加 Docker Desktop adapter，schema 稳定 |
+| v1.1 范围 | Docker 验证对象改为 OrbStack（Q57）；schema 仍为 1.0.0 |
 
 ---
 
@@ -346,7 +347,7 @@ trait ToolchainAdapter {
 
 **adapter 纪律（Q8）：**
 
-- v1 只上 **3 个全深度** adapter：Xcode/CoreSimulator、Homebrew、Docker Desktop。**浅 adapter 比没有更差** —— 它把 mole 的 feature-local 问题搬进我们自己的架构。
+- v1 只上 **3 个全深度** adapter：Xcode/CoreSimulator、Homebrew、Docker（OrbStack 验证）。**浅 adapter 比没有更差** —— 它把 mole 的 feature-local 问题搬进我们自己的架构。
 - 每个 adapter **必须钉住已验证的第三方 CLI 版本范围**，未知版本显式降级。这是最大的长期维护风险：adapter 包装的是第三方 CLI，输出格式会变。
 - 规则**只能引用已编译的 adapter id**，不能提供任意命令。**这是安全属性，不是架构品味** —— 允许 TOML 携带任意命令等于开命令注入面。
 
@@ -369,18 +370,19 @@ simdiskimaged，必须进入 side-effect registry 并提供同一个关闭开关
 Devices root 时 devices probe 调用为 0。simctl stderr 原文只写 stderr，payload 只保留
 稳定 typed warning。advice 可展示 `xcrun simctl`，但 SizeTrail 不执行。
 
-**P5 Docker Desktop（Q55、Q56）：** Docker daemon 的 images、containers、volumes 与
-BuildKit cache 是 typed object set，不是可伪造为 `Docker.raw` 的文件路径。adapter 只通过
-Docker.app 内绝对 CLI 执行三条闭集 probe：context inspect、version JSON、system-df JSON；
+**P5 Docker（Q55、Q56、Q57）：** Docker daemon 的 images、containers、volumes 与
+BuildKit cache 是 typed object set，不是可伪造为宿主 VM disk 的文件路径。adapter 只通过
+OrbStack.app 内绝对 CLI 执行三条闭集 probe：context inspect、version JSON、system-df JSON；
 每条每次扫描至多一次，共用 `SIZETRAIL_NO_DOCKER_PROBE`。连接 daemon 前必须验证
-`desktop-linux` endpoint 为当前 HOME 下的 Docker Desktop Unix socket；清除
+`orbstack` endpoint 为当前 HOME 下的 OrbStack Unix socket；清除
 `DOCKER_HOST`、`DOCKER_CONTEXT`、`DOCKER_CONFIG`、`DOCKER_API_VERSION`、
 `DOCKER_CERT_PATH`、`DOCKER_TLS_VERIFY` 等重定向输入。unknown version 或 endpoint mismatch
-均 fail closed，且 system-df 调用数为 0。
+均 fail closed，且 system-df 调用数为 0。残留的 `desktop-linux` context 与 PATH `docker`
+都不是正例。
 
 `system df --format json` 的 size/reclaimable 是 vendor 舍入字符串，按 Q56 输出
-`rounded_bytes`，basis 为 `docker_system_df`；禁止标为 exact。该命令可能唤醒 Resource
-Saver，并会遍历 daemon 中的 image/container/volume filesystems，二者均登记为已知读副作用。
+`rounded_bytes`，basis 为 `docker_system_df`；禁止标为 exact。该命令可能唤醒暂停的
+OrbStack VM，并会遍历 daemon 中的 image/container/volume filesystems，二者均登记为已知读副作用。
 静态 VM disk image 计量不依赖 daemon probe 成功，且不得与 daemon 数字求和或相减。
 
 ### 5.3 验证矩阵（Q12）
@@ -490,7 +492,7 @@ process_not_running = ["Xcode"]        # owner 进程在跑则标注状态
 
 **一级按开发者心智 / adapter，二级 finding 按对象用途。**
 
-一级桶：`Xcode & Simulators`、`Homebrew`、`Docker Desktop`、**`未归属到任何工具链`**。
+一级桶：`Xcode & Simulators`、`Homebrew`、`Docker`、**`未归属到任何工具链`**。
 
 **「未归属」桶表示「已测量但 ownership 未归属」。** 它与 `unmeasurable`、`coverage_gaps` 是三个不同类型，**不得混同**。
 
@@ -576,7 +578,7 @@ enum Advice {
 | Homebrew 自动更新 | 设置 `HOMEBREW_NO_AUTO_UPDATE=1`；只调用闭集只读子命令 |
 | iCloud materialization | §3.2 的 `IOPOL_MATERIALIZE_DATALESS_FILES_OFF`，失败即记 unknown |
 | mount trigger / 自动挂载 | 拒绝跨文件系统、拒绝嵌套挂载与 mount trigger；firmlink 按真实卷身份处理 |
-| 错误 Docker context | 固定 `desktop-linux` context；context 不匹配则降级为 unknown |
+| 错误 Docker context | 固定 `orbstack` context；context 不匹配则降级为 unknown |
 | 外部命令写状态 | 闭集白名单，每条命令单独审计并记录其只读性依据 |
 | CoreSimulatorService 启动 | 裸命令不自动探测；只在显式子命令下发起（Q22） |
 
@@ -857,24 +859,24 @@ fixture 生成时 `environment` 使用**固定注入值**，**不允许事后正
 | `brew.env` 改向 `HOMEBREW_CACHE` / `HOMEBREW_LOGS` | — | — | — | — | **未覆盖**：v0.2 不读取或解析 `brew.env`；仅当默认 cache **根**不存在时发一条 `unsupported_path_override`（`declared_scope_boundary`）。子目录缺席是常态，不发 gap |
 | 外部命令 / 子进程 | `Command` 仅 policy | — | sandbox 逐子命令覆盖直接进程写尝试 | 是 | registry 精确锁定六条 Xcode/CoreSimulator 与三条 Docker probe；adapter 只能提交 `ProbeId`，不能提交程序、参数或用户输入 |
 | Homebrew 外部命令 / 子进程 | `Command` 仅 policy；Homebrew 无 probe id | — | Homebrew read-only harness + scan sandbox | 精确为 0 | 完整 Homebrew inventory 后逐 registry id 断言计数仍为 0；`SIDE_EFFECT_REGISTRY` 精确集合测试锁住未新增条目 |
-| Docker CLI context 配置读取 | `Command` 仅 policy；adapter 不直接读 CLI 配置 | — | 产品 sandbox 中尚未接线 Docker | 是，max 1、10s | 固定 Docker.app binary 与 `desktop-linux`；清除 Docker 连接重定向环境并关闭 CLI hooks；只接受当前 HOME 的 per-user Unix socket。CLI 子进程如何读取其内部配置不由 TreeSnapshot 单独证明 |
-| Docker `context inspect desktop-linux --format json` | `Command` 仅 policy | — | 产品 sandbox 中尚未接线 Docker | 是，max 1、10s | 长度一 JSON array、context 名、endpoint 与 `SkipTLSVerify=false` 全部验证；TCP、SSH、系统 socket 与其他 HOME 早退，后续两条调用为 0 |
-| Docker `--context desktop-linux version --format json` | `Command` 仅 policy | — | 产品 sandbox 中尚未接线 Docker | 是，max 1、15s | 当前只接受 checked-in 的 Desktop/CLI/Engine/API 精确组合；nonzero、未知或畸形输出降级，`system df` 调用为 0 |
-| Docker `--context desktop-linux system df --format json` | `Command` 仅 policy | — | 产品 sandbox 中尚未接线 Docker | 是，max 1、120s | NDJSON 必须恰含四类；string count 转换、human-size、重复/缺失/未知类、负数、溢出、非 UTF-8 与额外 stdout fixtures；timeout/nonzero 无重试 |
+| Docker CLI context 配置读取 | `Command` 仅 policy；adapter 不直接读 CLI 配置 | — | 产品 sandbox 中尚未接线 Docker | 是，max 1、10s | 固定 OrbStack.app binary 与 `orbstack`；清除 Docker 连接重定向环境并关闭 CLI hooks；只接受当前 HOME 的 per-user Unix socket。CLI 子进程如何读取其内部配置不由 TreeSnapshot 单独证明 |
+| Docker `context inspect orbstack --format json` | `Command` 仅 policy | — | 产品 sandbox 中尚未接线 Docker | 是，max 1、10s | 长度一 JSON array、context 名、endpoint 与 `SkipTLSVerify=false` 全部验证；TCP、SSH、系统 socket、`desktop-linux`、`/var/run/docker.sock` 与其他 HOME 早退，后续两条调用为 0 |
+| Docker `--context orbstack version --format json` | `Command` 仅 policy | — | 产品 sandbox 中尚未接线 Docker | 是，max 1、15s | 当前只接受 checked-in 的 CLI/Engine/API/OrbStack kernel 精确组合；`Platform.Name` 单独不够。nonzero、未知或畸形输出降级，`system df` 调用为 0 |
+| Docker `--context orbstack system df --format json` | `Command` 仅 policy | — | 产品 sandbox 中尚未接线 Docker | 是，max 1、120s | NDJSON 必须恰含四类；string count 转换、human-size、重复/缺失/未知类、负数、溢出、非 UTF-8 与额外 stdout fixtures；timeout/nonzero 无重试 |
 | Docker daemon 四类 object-set inventory | 只消费已解析的 `system df` 行；不新增 Command | — | adapter fixture；产品 sandbox 尚未接线 Docker | 仅 Ready 时 1 次 `system df` | 映射为 images/containers/volumes/build cache；counts 为 vendor 整数，size/reclaimable 为 `rounded_bytes` + `basis=docker_system_df`。四类不得求和，也不得从 host allocated 相减。NotPresent/unknown version 不调用 `system df`，畸形输出保留宿主磁盘 |
-| Docker inactive store after Desktop store-switch | — | — | adapter fixture | — | 成功 daemon 报告固定携带 `daemon_inventory_excludes_inactive_store`（`declared_scope_boundary`）。失败的 summary 不假装覆盖了 inactive store |
-| Docker command / Reveal advice | 只渲染 stdout；永不进入 probe runner | — | adapter fixture | 0 | 固定 `--context desktop-linux`；`image prune` / `builder prune` / `ps -a` / `system prune --volumes`。无 `--force` / `--yes` / 管道。raw/qcow2 只 Reveal 且写明不是可删除目标；`system prune --volumes` 必须写明会删 stopped containers、未使用对象与 anonymous volumes，且不是推荐的一键下一步 |
-| Docker `scan` / `doctor` / `--no-docker` | 只读 CLI；adapter 经 `docker_report` | — | CLI fixture + deny-write sandbox | 生产 probe 受 registry 限制 | `--no-docker` 为 `excluded_by_user`、退出 0。无 Docker.app 为 `not_present`，不阻断宿主磁盘 finding |
+| Docker inactive store after Desktop store-switch | — | — | schema 保留 reason | — | OrbStack 成功 daemon 报告**不**携带 `daemon_inventory_excludes_inactive_store`：本机无 classic/containerd 双 store 证据。reason 仍在 schema 中，供历史 Desktop 文档使用 |
+| Docker command / Reveal advice | 只渲染 stdout；永不进入 probe runner | — | adapter fixture | 0 | 固定 `--context orbstack`；`image prune` / `builder prune` / `ps -a` / `system prune --volumes`。无 `--force` / `--yes` / 管道。`data.img.raw` / `data.img` 只 Reveal 且写明不是可删除目标；`system prune --volumes` 必须写明会删 stopped containers、未使用对象与 anonymous volumes，且不是推荐的一键下一步 |
+| Docker `scan` / `doctor` / `--no-docker` | 只读 CLI；adapter 经 `docker_report` | — | CLI fixture + deny-write sandbox | 生产 probe 受 registry 限制 | `--no-docker` 为 `excluded_by_user`、退出 0。无 OrbStack.app 为 `not_present`，不阻断宿主磁盘 finding |
 | Docker live `explain` 与 `--from` / `--path` | `--from` 零 probe；live 只重探 docker owner | — | CLI fixture | live 仅 docker probe 闭集 | object-set `--path` 明确失败；filesystem subject 保持既有路径输出 |
-| Docker `--exclude` 默认与自定义 disk Root | 校验后在 inventory/probe 计量前生效 | `path_exists_without_descending` | default/custom DataFolder fixtures | — | 覆盖 `~/Library/Containers/com.docker.docker` 与 settings 发现的 DataFolder。object-set 不接受路径 exclude |
-| Docker sandbox 关 probe 仍计量 raw | `SIZETRAIL_NO_DOCKER_PROBE` | — | 产品 deny-write sandbox | 0 | sandbox HOME 放入 `Docker.raw` 并断言 finding 出现；三条 CLI 调用为 0 |
-| Docker Desktop 真机验收 | 维护者机器；hosted runner 无 Desktop | — | `#[ignore]` real-environment 测试 | 真机才跑 | **不得**把 hosted `not_present` 写成正例。记录 Desktop/CLI/Engine/API 与 socket 由维护者执行，不在本小节发布数字 |
+| Docker `--exclude` 默认与自定义 disk Root | 校验后在 inventory/probe 计量前生效 | `path_exists_without_descending` | default/custom `data_dir` fixtures | — | 覆盖 `~/Library/Group Containers/HUAQ24HBR6.dev.orbstack` 与 `vmconfig.json` 发现的 `data_dir`。object-set 不接受路径 exclude |
+| Docker sandbox 关 probe 仍计量 raw | `SIZETRAIL_NO_DOCKER_PROBE` | — | 产品 deny-write sandbox | 0 | sandbox HOME 放入 `data.img.raw` 并断言 finding 出现；三条 CLI 调用为 0 |
+| OrbStack 真机验收 | 维护者机器；hosted runner 无 OrbStack | — | `#[ignore]` real-environment 测试 | 真机才跑 | **不得**把 hosted `not_present` 写成正例。记录 OrbStack/CLI/Engine/API/kernel 与 socket 由维护者执行，不在本小节发布数字 |
 | Docker fixture benchmark | stubbed `system df` + sparse raw | — | ignored test + runner artifact | 0 | 只发布 runner+fixture 原始墙钟；不推广 |
 | v1 schema freeze 与 `--from` | 生成文档逐字节锁定 | — | CLI fixture + generated docs gate | — | `SCHEMA_VERSION` 为 `1.0.0`。v0.x report 被拒绝，不得尽力误读 |
-| Docker CLI 诱发 daemon / Resource Saver 状态变化 | — | — | 不覆盖 daemon | 是（只限制调用次数） | **未覆盖 daemon 写**；version 可能唤醒 Resource Saver，system-df 还会遍历 daemon storage；已登记、无自动重试、可由 `SIZETRAIL_NO_DOCKER_PROBE` 关闭 |
-| Docker Desktop settings 读取 | safe read 只在 HOME `Root::measure_object` 与 dataless 检查后执行 | `getattrlist` 精确符号集 | P5.2 fixture；产品 sandbox 尚未接线 Docker | — | current `settings-store.json/DataFolder` 与 legacy `settings.json/dataFolder` 分开锁定；值只接受规范化绝对目录。当前文件畸形时不回退猜默认路径 |
-| Docker 自定义 DataFolder 独立 `Root` | safe 路径解析后只走 `Root` API | 与 HOME Root 相同的 FFI 精确集合 | HOME 外 DataFolder fixture；产品 sandbox 尚未接线 Docker | — | external fixture 证明不借 HOME Root 越界；Root 初始化失败只形成 typed gap，不与 HOME 或 daemon 数字求和 |
-| Docker.raw / Docker.qcow2 metadata | safe `symlink_metadata`；永不打开 image 内容 | `getattrlist` 精确符号集 | sparse/default/custom/two-generation legacy/ambiguous fixtures；产品 sandbox 尚未接线 Docker | — | 只产生 logical limit 与 host allocated footprint；dataless/非普通文件拒绝；raw+qcow2 未获 verified-version 唯一选择时 typed ambiguous，绝无 disposition interval |
+| Docker CLI 诱发 daemon / 暂停 VM 状态变化 | — | — | 不覆盖 daemon | 是（只限制调用次数） | **未覆盖 daemon 写**；version 可能唤醒暂停的 OrbStack VM，system-df 还会遍历 daemon storage；已登记、无自动重试、可由 `SIZETRAIL_NO_DOCKER_PROBE` 关闭 |
+| OrbStack `vmconfig.json` 读取 | safe read 只在 HOME `Root::measure_object` 与 dataless 检查后执行 | `getattrlist` 精确符号集 | P5.2 fixture；产品 sandbox 尚未接线 Docker | — | 只读 `data_dir`。缺省或 `null` 回落默认 Group Container；畸形 JSON 或非法路径不回退猜默认。不读 Desktop `settings-store.json` |
+| Docker 自定义 `data_dir` 独立 `Root` | safe 路径解析后只走 `Root` API | 与 HOME Root 相同的 FFI 精确集合 | HOME 外 `data_dir` fixture；产品 sandbox 尚未接线 Docker | — | external fixture 证明不借 HOME Root 越界；Root 初始化失败只形成 typed gap，不与 HOME 或 daemon 数字求和 |
+| `data.img.raw` / `data.img` metadata | safe `symlink_metadata`；永不打开 image 内容 | `getattrlist` 精确符号集 | sparse/default/custom/ambiguous fixtures；产品 sandbox 尚未接线 Docker | — | 只产生 logical limit 与 host allocated footprint；dataless/非普通文件拒绝；raw+sparse 未获 verified-version 唯一选择时 typed ambiguous，绝无 disposition interval。不计量 `swap.img`、`rootfs.img`、`~/OrbStack` |
 | `/usr/bin/xcode-select -p` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 生产 probe 测试实际执行；只判 selection，标准 CLT → `not_present` |
 | `/usr/bin/xcodebuild -version` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 仅 selection 为完整 Xcode 候选后运行；固定 locale/清除重定向环境；未知版本降级 |
 | `/usr/bin/xcodebuild -checkFirstLaunchStatus` | `Command` 仅 policy | — | 是（直接进程） | 是，max 1 | 仅已验证版本运行；非零为 `not_ready`，绝不调用写入型 `-runFirstLaunch` / `-license accept` |
@@ -1036,11 +1038,12 @@ prefix 位于 HOME 之外，因此需要**为 prefix 单独 `Root::open`**。若
 
 ---
 
-## 12.3 P5 — Docker Desktop adapter 与 v1 schema 稳定化（Q55–Q56）
+## 12.3 P5 — Docker adapter 与 v1 schema 稳定化（Q55–Q56；验证对象经 Q57 改为 OrbStack）
 
-本阶段严格按下列小节推进；前一小节的测试与门禁未绿，不进入下一小节。Docker Desktop
+本阶段严格按下列小节推进；前一小节的测试与门禁未绿，不进入下一小节。OrbStack
 把多种 daemon 对象封装在同一 VM disk image 中，因此“宿主文件计量”与“daemon 分类计量”
-是两个不相加的证据面，不能用其中一个替代另一个。
+是两个不相加的证据面，不能用其中一个替代另一个。v1.0 曾以 Docker Desktop 为验证对象；
+Q57 将其替换为本机 OrbStack，schema 仍为 1.0.0。
 
 ### 12.3.0 v1 schema 前置
 
@@ -1056,37 +1059,39 @@ prefix 位于 HOME 之外，因此需要**为 prefix 单独 `Root::open`**。若
 
 ### 12.3.1 probe 闭集与版本门控
 
-生产只允许 Docker.app 自带的绝对 binary。registry 顺序与上限：
+生产只允许 OrbStack.app 自带的绝对 binary。registry 顺序与上限：
 
 | probe id | 固定语义 | max | timeout | 已知副作用 |
 |---|---|---:|---:|---|
-| `docker.context_inspect` | 读取 `desktop-linux` endpoint JSON | 1 | 10s | 读取 Docker CLI 用户配置 |
-| `docker.version` | 固定 context 的 client/server JSON | 1 | 15s | 连接 daemon，可能唤醒 Resource Saver |
+| `docker.context_inspect` | 读取 `orbstack` endpoint JSON | 1 | 10s | 读取 Docker CLI 用户配置 |
+| `docker.version` | 固定 context 的 client/server JSON | 1 | 15s | 连接 daemon，可能唤醒暂停的 VM |
 | `docker.system_df` | 固定 context 的 summary JSON | 1 | 120s | 可能唤醒 VM；遍历 image/container/volume filesystems |
 
 要求：
 
-1. context endpoint 必须是 `unix://<HOME>/.docker/run/docker.sock`；TCP、SSH、系统 socket、
-   其他 HOME 或无法解析一律 `InvalidSelection`，且后两条调用均为 0。
+1. context endpoint 必须是 `unix://<HOME>/.orbstack/run/docker.sock`；TCP、SSH、系统 socket、
+   `desktop-linux`、其他 HOME 或无法解析一律 `InvalidSelection`，且后两条调用均为 0。
 2. 清除全部已知 Docker 连接重定向环境变量；命令、参数、context 名均不得来自用户输入。
-3. client version、server version、Docker Desktop platform 与 negotiated API 必须落在 checked-in
-   verified set；未知组合 `Degraded { UnknownVersion }`，system-df 调用为 0。
+3. client version、server version、negotiated API 与 `Server.KernelVersion` 必须落在 checked-in
+   verified set；`Server.Platform.Name` 单独不够。未知组合 `Degraded { UnknownVersion }`，system-df 调用为 0。
 4. `system df` stdout 必须恰好解析成四类 typed row：images、containers、local volumes、
    build cache。缺类、重复类、未知类、负数、溢出、非 UTF-8 或额外 stdout 均 typed gap。
 5. disabled、timeout、nonzero 与 malformed output 各有 fixture；无自动重试。
 
 ### 12.3.2 宿主 VM disk image
 
-默认位置：`~/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw`。同时支持：
+默认位置：`~/Library/Group Containers/HUAQ24HBR6.dev.orbstack/data/data.img.raw`。同时支持：
 
-- 当前 `~/Library/Group Containers/group.com.docker/settings-store.json` 的 `DataFolder`；
-- Docker Desktop 4.34 及更早 `settings.json` 的 `dataFolder`；
-- data-folder 内的 legacy `Docker.qcow2`，以及更早的
-  `~/Library/Containers/com.docker.docker/Data/com.docker.driver.amd64-linux/Docker.qcow2`。
+- 同目录稀疏 `data.img`；
+- `~/.orbstack/vmconfig.json` 的 `data_dir`（缺省或 `null` 回落默认目录）。
 
-设置文件先经 HOME `Root::measure_object` 与 dataless gate，再读取内容。自定义 DataFolder
-为独立 `Root`；finding 单独报告，绝不与 HOME Root 或 daemon category 求和。raw 与 qcow2
-同时存在且无法由已验证版本规则唯一选择时发 typed `ambiguous_disk_image`，不得相加。
+不计量 `swap.img`、app bundle 内 `rootfs.img`，也不把 `~/OrbStack` 当存储根。
+
+`vmconfig.json` 先经 HOME `Root::measure_object` 与 dataless gate，再读取内容。自定义
+`data_dir` 为独立 `Root`；finding 单独报告，绝不与 HOME Root 或 daemon category 求和。
+`data.img.raw` 与 `data.img` 同时存在且无法由已验证版本规则唯一选择时发 typed
+`ambiguous_disk_image`，不得相加。Group Container 被 TCC 拒绝时记 typed gap，不得写成
+`not_present`。
 
 disk image finding 只报告：
 
@@ -1112,10 +1117,10 @@ counts 是 vendor 原始整数；size/reclaimable 永远使用 `rounded_bytes` +
 `basis=docker_system_df`。四类不得求和成“daemon total”：image shared layers 与不同 storage
 driver 口径可能重叠。也不得从 host allocated 中相减得到 VM overhead 或 unknown。
 
-Docker Desktop 在 classic/containerd store 间切换时，daemon 只显示 active store；旧 store
-仍可能留在同一 disk image。每份成功报告固定携带
-`daemon_inventory_excludes_inactive_store` declared-scope gap。单次 scan 也不提供 actual host
-free delta；该数字只有用户执行厂商命令后比较两份独立报告才存在，口径文档必须明说。
+Desktop 在 classic/containerd store 间切换时，daemon 只显示 active store。OrbStack 本机没有
+该双 store 证据，因此成功 daemon 报告**不**携带
+`daemon_inventory_excludes_inactive_store`。schema 仍保留该 reason。单次 scan 也不提供
+actual host free delta；该数字只有用户执行厂商命令后比较两份独立报告才存在，口径文档必须明说。
 
 ### 12.3.4 rules 与 advice
 
@@ -1125,10 +1130,10 @@ free delta；该数字只有用户执行厂商命令后比较两份独立报告�
 - virtual disk、containers、volumes 为高风险/用户状态，不给出直接文件删除建议；
 - images 为 re-downloadable，build cache 为 rebuildable；
 - command advice 只使用当前 verified Docker CLI 支持的官方命令，固定
-  `--context desktop-linux`，绝不附加 `--force` / `--yes` / shell pipeline；
+  `--context orbstack`，绝不附加 `--force` / `--yes` / shell pipeline；
 - 若展示 `docker system prune --volumes`，必须明确它会删除 stopped containers、未使用
   network/image/build cache 及未使用 anonymous volumes，且不是推荐的一键下一步；
-- `Docker.raw` / `Docker.qcow2` 永不进入 RevealAdvice 的“可删除”语义。
+- `data.img.raw` / `data.img` 永不进入 RevealAdvice 的“可删除”语义。
 
 ### 12.3.5 CLI、coverage 与测试
 
@@ -1138,10 +1143,11 @@ free delta；该数字只有用户执行厂商命令后比较两份独立报告�
    不接受路径 exclude，使用 `--no-docker`。
 4. TreeSnapshot、deny-write sandbox 与 registry count 覆盖三个 Docker probe；sandbox 关闭
    Docker probe 但仍断言静态 disk image measurement 确实执行。
-5. fixture 覆盖默认/custom/legacy/ambiguous disk image、context mismatch、unknown version、
+5. fixture 覆盖默认/custom/ambiguous disk image、忽略 `swap.img`、context mismatch、
+   leftover `desktop-linux`、unknown version、generic platform-without-kernel、
    disabled、timeout、malformed/partial/duplicate system-df、四类 row、舍入边界与 advice。
-6. 维护者真实 Docker Desktop 机器执行 `doctor`、text scan、JSON scan、live explain，并记录
-   Docker Desktop/CLI/Engine/API 精确版本与 context endpoint。hosted runner 无 Docker Desktop
+6. 维护者真实 OrbStack 机器执行 `doctor`、text scan、JSON scan、live explain，并记录
+   OrbStack/CLI/Engine/API/kernel 精确版本与 context endpoint。hosted runner 无 OrbStack
    时不得把 `not_present` 冒充真机正例。
 7. Docker fixture benchmark 记录墙钟时间；数字只发布为 runner+fixture 原始值，不推广。
 
@@ -1149,8 +1155,9 @@ free delta；该数字只有用户执行厂商命令后比较两份独立报告�
 
 - `COMPILED_ADAPTER_IDS` 为恰好 `homebrew`、`xcode`、`docker`；规则与 fixtures 全绿。
 - registry 精确新增三条 Docker probe，并证明所有早退路径的调用上限。
-- §12.1 通道覆盖矩阵重新推导，至少新增三条 CLI、context 配置读取、settings 读取、外置
-  DataFolder Root、VM disk metadata、daemon/Resource Saver IPC 与 inactive-store 空格。
+- §12.1 通道覆盖矩阵重新推导，至少新增三条 CLI、context 配置读取、vmconfig 读取、外置
+  `data_dir` Root、VM disk metadata、daemon/paused-VM IPC。inactive-store 空格保留在 schema，
+  不再作为 OrbStack 成功报告的固定 gap。
 - schema version 变为 `1.0.0`；生成并逐字节锁定 JSON Schema、fixture report、coverage/unknown
   baseline 与 measurement-basis 文档。v0.x report 不得被 v1 `--from` 尽力误读。
 - README 只转写生成片段；版本号/章节号/日期仅使用 §9.1 窄允许清单。所有公开数字经 fixture
@@ -1158,6 +1165,16 @@ free delta；该数字只有用户执行厂商命令后比较两份独立报告�
 - required CI、dependency policy、zero-write sandbox 全绿；维护者真机验收记录齐备。
 - 执行 `/ponytail-review`、`/ponytail-audit` 与 `/ponytail-debt`，处理阻塞项。
 - release notes 落 `docs/release-notes/v1.0.0.md`，使用 `--notes-file` 发布 v1.0。
+
+### 12.3.7 Q57 OrbStack 验证对象（crate 1.1.0）
+
+1. 生产 binary、context、socket、disk、settings 与 advice 全部改为 OrbStack 已验证路径；
+   PATH `/usr/local/bin/docker` 与残留 `desktop-linux` 不是正例。
+2. 版本门钉 `Server.KernelVersion`；不得只钉 `Server.Platform.Name`。
+3. 成功 `system df` 不再固定发出 Desktop inactive-store gap。
+4. schema 仍为 `1.0.0`；crate / `tool_version` 为 `1.1.0`；notes 落
+   `docs/release-notes/v1.1.0.md`。
+5. hosted runner 无 OrbStack 时 `not_present` 仍不得写成正例。
 
 ---
 

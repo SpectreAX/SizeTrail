@@ -1,4 +1,4 @@
-Release: **v1.0.0 stable schema**
+Release: **v1.1.0 OrbStack docker verification**
 
 API baseline: **macOS 13 best effort, not runtime-tested in hosted CI**
 
