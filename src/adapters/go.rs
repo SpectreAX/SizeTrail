@@ -7,7 +7,7 @@ use crate::adapters::{
     AdapterDegradedReason, AdapterId, AdapterState, Inventory, InventoryGap, InventoryGapReason,
     InventoryIdentity, InventoryItem, InventoryStage, ToolchainAdapter,
 };
-use crate::fsx::Root;
+use crate::fsx::{Root, RootError};
 use crate::model::{
     Advice, AdviceImpact, CommandAdvice, Finding, FindingSubject, finding_id, normalize_findings,
     normalized_report_path,
@@ -223,47 +223,50 @@ impl GoAdapter<'_> {
     fn measure_cache(
         &self,
         cache: &CacheRoot,
-        snapshots: bool,
+        home_snapshots: bool,
     ) -> Result<Option<InventoryItem>, InventoryGap> {
-        let exists = if cache.path.starts_with(self.home_root.path()) {
-            self.home_root
-                .path_exists_without_descending(&cache.path)
-                .map_err(|error| io_gap(cache.path.clone(), &error))?
-        } else {
-            match Root::open(&cache.path) {
-                Ok(_) => true,
-                Err(_) => std::fs::symlink_metadata(&cache.path).is_ok(),
-            }
-        };
-        if !exists {
-            return Ok(None);
-        }
-        let (root, scope) = if cache.path.starts_with(self.home_root.path()) {
-            let scope =
-                normalized_report_path(self.home_root.path(), &cache.path).map_err(|_| {
-                    InventoryGap {
+        if !cache.path.starts_with(self.home_root.path()) {
+            let opened = match Root::open(&cache.path) {
+                Ok(opened) => opened,
+                Err(RootError::PathUnresolvable) => return Ok(None),
+                Err(_) => {
+                    return Err(InventoryGap {
                         region: cache.rule_id,
                         path: Some(cache.path.clone()),
                         reason: InventoryGapReason::TraversalFailed,
-                        stage: Some(InventoryStage::NormalizePath),
+                        stage: Some(InventoryStage::RootInitialization),
                         errno: None,
-                    }
-                })?;
-            (self.home_root, scope)
-        } else {
-            let opened = Root::open(&cache.path).map_err(|_| InventoryGap {
+                    });
+                }
+            };
+            let snapshots = opened.volume_has_snapshots().unwrap_or(false);
+            let scope = cache.path.to_string_lossy().into_owned();
+            return measure_opened(opened, cache, self.excludes, snapshots, scope);
+        }
+        if !self
+            .home_root
+            .path_exists_without_descending(&cache.path)
+            .map_err(|error| io_gap(cache.path.clone(), &error))?
+        {
+            return Ok(None);
+        }
+        let scope = normalized_report_path(self.home_root.path(), &cache.path).map_err(|_| {
+            InventoryGap {
                 region: cache.rule_id,
                 path: Some(cache.path.clone()),
                 reason: InventoryGapReason::TraversalFailed,
-                stage: Some(InventoryStage::RootInitialization),
+                stage: Some(InventoryStage::NormalizePath),
                 errno: None,
-            })?;
-            let scope = cache.path.to_string_lossy().into_owned();
-            return measure_opened(opened, cache, snapshots, scope);
-        };
-        let (measurements, observations) =
-            measure_store_as(root, &cache.path, self.excludes, snapshots, scope.clone())
-                .map_err(|error| io_gap(cache.path.clone(), &error))?;
+            }
+        })?;
+        let (measurements, observations) = measure_store_as(
+            self.home_root,
+            &cache.path,
+            self.excludes,
+            home_snapshots,
+            scope.clone(),
+        )
+        .map_err(|error| io_gap(cache.path.clone(), &error))?;
         Ok(Some(InventoryItem {
             rule_id: cache.rule_id.to_owned(),
             subject: FindingSubject::FilesystemPath {
@@ -280,11 +283,12 @@ impl GoAdapter<'_> {
 fn measure_opened(
     root: Root,
     cache: &CacheRoot,
+    excludes: &[PathBuf],
     snapshots: bool,
     scope: String,
 ) -> Result<Option<InventoryItem>, InventoryGap> {
     let (measurements, observations) =
-        measure_store_as(&root, root.path(), &[], snapshots, scope.clone())
+        measure_store_as(&root, root.path(), excludes, snapshots, scope.clone())
             .map_err(|error| io_gap(cache.path.clone(), &error))?;
     Ok(Some(InventoryItem {
         rule_id: cache.rule_id.to_owned(),

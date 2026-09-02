@@ -96,6 +96,43 @@ fn goenv_overrides_measure_an_external_root() {
 }
 
 #[test]
+fn exclusion_inside_an_external_cache_is_applied_before_inventory() {
+    let fixture = fixture_home();
+    let custom_build_dir = tempfile::tempdir().expect("external build cache must be created");
+    let custom_build = std::fs::canonicalize(custom_build_dir.path())
+        .expect("external build cache must canonicalize");
+    write_cache(&custom_build, "");
+    let excluded = custom_build.join("private-subtree");
+    std::fs::create_dir(&excluded).expect("excluded subtree must be created");
+    std::fs::write(excluded.join("must-not-be-measured"), b"excluded")
+        .expect("excluded object must be written");
+    write_goenv(
+        &fixture.path,
+        &format!("GOCACHE={}\n", custom_build.display()),
+    );
+    let root = Root::open(&fixture.path).expect("fixture HOME must initialize");
+    let adapter = GoAdapter::new(&root, std::slice::from_ref(&excluded));
+    let inventory = adapter.inventory(&mut unused_ctx(), &AdapterState::NotPresent);
+
+    let build = inventory
+        .items
+        .iter()
+        .find(|item| item.rule_id == "go.build_cache")
+        .expect("external build cache");
+    let encoded = serde_json::to_value(&build.measurements).expect("measurements must serialize");
+    assert!(
+        encoded
+            .as_array()
+            .expect("measurements")
+            .iter()
+            .any(|measurement| {
+                measurement["quantity"] == "logical_size" && measurement["value"]["bytes"] == 6
+            }),
+        "excluded descendants must not contribute to an external cache: {encoded}"
+    );
+}
+
+#[test]
 fn unknown_version_still_measures_default_caches() {
     let fixture = fixture_home();
     write_cache(&fixture.path, BUILD_CACHE_RELATIVE);
