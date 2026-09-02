@@ -215,4 +215,17 @@ jobs:
           ls -1 "$HOME/Library/Developer/CoreSimulator/Devices" 2>/dev/null | wc -l
 
       - name: Real-environment attribution and version-gate degradation
-        run: cargo test --locked --test real_environment -- --ignored --nocapture
+        run: |
+          cargo test --locked --test real_environment real_homebrew_storage_is_attributed_without_crossing_into_applications -- --ignored --exact --nocapture
+          cargo test --locked --test real_environment real_xcode_storage_produces_structurally_valid_findings -- --ignored --exact --nocapture
+          cargo test --locked --test real_environment an_exact_version_mismatch_degrades_without_touching_the_wrapper -- --ignored --exact --nocapture
+          if [ -f /opt/homebrew/bin/go ] || [ -f /usr/local/go/bin/go ]; then
+            cargo test --locked --test real_environment real_go_is_not_confused_with_not_present -- --ignored --exact --nocapture
+          else
+            echo 'Go real-environment test not run: no admitted production binary on this runner'
+          fi
+          if [ -f /Applications/OrbStack.app/Contents/MacOS/xbin/docker ] && [ -S "$HOME/.orbstack/run/docker.sock" ]; then
+            cargo test --locked --test real_environment real_orbstack_is_not_confused_with_not_present -- --ignored --exact --nocapture
+          else
+            echo 'OrbStack real-environment test not run: runtime prerequisites absent on this runner'
+          fi

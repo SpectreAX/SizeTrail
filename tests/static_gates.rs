@@ -550,8 +550,10 @@ const CLI_SURFACE_FIXTURE: &str = r##"
 int main(int argc, char **argv) {
     const char *xcode_gate = getenv("SIZETRAIL_NO_XCODE_PROBE");
     const char *docker_gate = getenv("SIZETRAIL_NO_DOCKER_PROBE");
+    const char *go_gate = getenv("SIZETRAIL_NO_GO_PROBE");
     if (xcode_gate == NULL || strcmp(xcode_gate, "1") != 0
-        || docker_gate == NULL || strcmp(docker_gate, "1") != 0) {
+        || docker_gate == NULL || strcmp(docker_gate, "1") != 0
+        || go_gate == NULL || strcmp(go_gate, "1") != 0) {
         return 42;
     }
 
@@ -560,7 +562,8 @@ int main(int argc, char **argv) {
     if (strcmp(command, "scan") == 0) {
         puts("{\"schema_version\":\"1.0.0\",\"payload\":"
              "{\"regions\":[{\"id\":\"capacity\",\"status\":\"complete\"}],"
-             "\"findings\":[{\"rule_id\":\"docker.virtual_disk\"}]}}");
+             "\"findings\":[{\"rule_id\":\"docker.virtual_disk\"},"
+             "{\"rule_id\":\"go.build_cache\"}]}}");
         return 0;
     }
     if (strcmp(command, "doctor") == 0) {

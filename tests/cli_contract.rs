@@ -62,7 +62,14 @@ fn exit_codes_distinguish_complete_fatal_usage_and_informational_scans() {
     let fixture = tempfile::tempdir().expect("fixture root must be created");
 
     let complete = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--no-docker", "--root"])
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-docker",
+            "--no-go",
+            "--root",
+        ])
         .arg(fixture.path())
         .output()
         .expect("complete scan must run");
@@ -121,7 +128,14 @@ fn a_cask_moved_outside_the_prefix_does_not_make_the_scan_incomplete() {
         .expect("staged app link must be created");
 
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--no-docker", "--root"])
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-docker",
+            "--no-go",
+            "--root",
+        ])
         .arg(fixture.path())
         .output()
         .expect("Homebrew cask scan must run");
@@ -170,7 +184,14 @@ fn a_cask_moved_outside_the_prefix_does_not_make_the_scan_incomplete() {
 fn a_missing_homebrew_cache_root_is_a_declared_boundary_not_an_incomplete_scan() {
     let fixture = homebrew_fixture();
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--no-docker", "--root"])
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-docker",
+            "--no-go",
+            "--root",
+        ])
         .arg(fixture.path())
         .output()
         .expect("Homebrew scan without cache root must run");
@@ -247,7 +268,14 @@ fn the_binary_reports_its_build_version_on_the_cli_and_in_json() {
 
     let fixture = tempfile::tempdir().expect("fixture root must be created");
     let scan = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--no-docker", "--root"])
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-docker",
+            "--no-go",
+            "--root",
+        ])
         .arg(fixture.path())
         .output()
         .expect("scan must run");
@@ -275,6 +303,7 @@ fn no_homebrew_is_an_explicit_successful_exclusion() {
             "--no-xcode",
             "--no-homebrew",
             "--no-docker",
+            "--no-go",
             "--root",
         ])
         .arg(fixture.path())
@@ -297,7 +326,14 @@ fn no_homebrew_is_an_explicit_successful_exclusion() {
 fn root_fixture_discovers_homebrew_without_running_brew() {
     let fixture = homebrew_fixture();
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--no-docker", "--root"])
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-docker",
+            "--no-go",
+            "--root",
+        ])
         .arg(fixture.path())
         .output()
         .expect("Homebrew fixture scan must run");
@@ -334,7 +370,14 @@ fn root_fixture_discovers_homebrew_without_running_brew() {
 fn live_explain_rescans_only_the_homebrew_owner() {
     let fixture = homebrew_fixture();
     let scan = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--no-docker", "--root"])
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-docker",
+            "--no-go",
+            "--root",
+        ])
         .arg(fixture.path())
         .output()
         .expect("Homebrew fixture scan must run");
@@ -367,7 +410,14 @@ fn exact_homebrew_prefix_exclusion_is_applied_before_inventory() {
     let fixture = homebrew_fixture();
     let keg = "/opt/homebrew/Cellar/example/1.0";
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--no-docker", "--exclude"])
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-docker",
+            "--no-go",
+            "--exclude",
+        ])
         .arg(keg)
         .arg("--root")
         .arg(fixture.path())
@@ -411,6 +461,7 @@ fn doctor_reports_homebrew_user_exclusion() {
             "--no-xcode",
             "--no-homebrew",
             "--no-docker",
+            "--no-go",
             "--root",
         ])
         .arg(fixture.path())
@@ -438,6 +489,7 @@ fn no_docker_is_an_explicit_successful_exclusion() {
             "--no-xcode",
             "--no-homebrew",
             "--no-docker",
+            "--no-go",
             "--root",
         ])
         .arg(fixture.path())
@@ -466,6 +518,7 @@ fn doctor_reports_docker_user_exclusion() {
             "--no-xcode",
             "--no-homebrew",
             "--no-docker",
+            "--no-go",
             "--root",
         ])
         .arg(fixture.path())
@@ -482,7 +535,14 @@ fn docker_virtual_disk_is_measured_without_the_daemon() {
     let fixture = tempfile::tempdir().expect("fixture root must be created");
     write_default_docker_raw(fixture.path());
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--no-homebrew", "--root"])
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-homebrew",
+            "--no-go",
+            "--root",
+        ])
         .arg(fixture.path())
         .output()
         .expect("Docker disk scan must run");
@@ -521,7 +581,14 @@ fn exact_docker_disk_exclusion_is_applied_before_inventory() {
     let fixture = tempfile::tempdir().expect("fixture root must be created");
     let disk = write_default_docker_raw(fixture.path());
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--no-homebrew", "--exclude"])
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-homebrew",
+            "--no-go",
+            "--exclude",
+        ])
         .arg(&disk)
         .arg("--root")
         .arg(fixture.path())
@@ -567,7 +634,14 @@ fn exact_custom_docker_data_folder_exclusion_is_applied_before_inventory() {
         &serde_json::json!({"data_dir": data_folder}).to_string(),
     );
     let output = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--no-homebrew", "--exclude"])
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-homebrew",
+            "--no-go",
+            "--exclude",
+        ])
         .arg(&physical_disk)
         .arg("--root")
         .arg(&home)
@@ -603,7 +677,14 @@ fn live_explain_rescans_only_the_docker_owner() {
     let fixture = tempfile::tempdir().expect("fixture root must be created");
     write_default_docker_raw(fixture.path());
     let scan = cargo_bin_cmd!("sizetrail")
-        .args(["scan", "--json", "--no-xcode", "--no-homebrew", "--root"])
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-homebrew",
+            "--no-go",
+            "--root",
+        ])
         .arg(fixture.path())
         .output()
         .expect("Docker disk scan must run");
@@ -648,4 +729,218 @@ fn live_explain_path_rejects_a_docker_object_set() {
         .expect("object-set explain must run");
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("finding has no filesystem path"));
+}
+
+fn write_default_go_caches(root: &std::path::Path) {
+    for relative in ["Library/Caches/go-build", "go/pkg/mod"] {
+        let path = root.join(relative);
+        std::fs::create_dir_all(&path).expect("Go cache fixture must be created");
+        std::fs::write(path.join("cached-object"), b"object")
+            .expect("cache object must be written");
+    }
+}
+
+#[test]
+fn no_go_is_an_explicit_successful_exclusion() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    let output = cargo_bin_cmd!("sizetrail")
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-homebrew",
+            "--no-docker",
+            "--no-go",
+            "--root",
+        ])
+        .arg(fixture.path())
+        .output()
+        .expect("excluded Go scan must run");
+
+    assert_eq!(output.status.code(), Some(0));
+    let document: Value =
+        serde_json::from_slice(&output.stdout).expect("scan must emit one JSON document");
+    assert!(
+        document["payload"]["regions"]
+            .as_array()
+            .expect("regions must be an array")
+            .iter()
+            .any(|region| region["id"] == "go" && region["status"] == "excluded_by_user")
+    );
+}
+
+#[test]
+fn doctor_reports_go_user_exclusion() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    let output = cargo_bin_cmd!("sizetrail")
+        .args([
+            "doctor",
+            "--json",
+            "--no-xcode",
+            "--no-homebrew",
+            "--no-docker",
+            "--no-go",
+            "--root",
+        ])
+        .arg(fixture.path())
+        .output()
+        .expect("doctor must run");
+
+    assert!(output.status.success());
+    let document: Value = serde_json::from_slice(&output.stdout).expect("doctor must emit JSON");
+    assert_eq!(document["go"]["status"], "excluded_by_user");
+}
+
+#[test]
+fn go_caches_are_measured_without_guessing_process_home() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    write_default_go_caches(fixture.path());
+    let output = cargo_bin_cmd!("sizetrail")
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-homebrew",
+            "--no-docker",
+            "--root",
+        ])
+        .arg(fixture.path())
+        .env("SIZETRAIL_NO_GO_PROBE", "1")
+        .output()
+        .expect("Go cache scan must run");
+
+    assert!(
+        matches!(output.status.code(), Some(0 | 3)),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: Value =
+        serde_json::from_slice(&output.stdout).expect("scan must emit one JSON document");
+    assert!(
+        document["payload"]["regions"]
+            .as_array()
+            .expect("regions")
+            .iter()
+            .find(|region| region["id"] == "go")
+            .is_some_and(|region| matches!(
+                region["status"].as_str(),
+                Some("not_present" | "unmeasurable")
+            )),
+        "a disabled probe is unmeasurable when Go exists and not_present when neither admitted binary exists"
+    );
+    let findings = document["payload"]["findings"]
+        .as_array()
+        .expect("findings");
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding["rule_id"] == "go.build_cache")
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding["rule_id"] == "go.module_cache")
+    );
+}
+
+#[test]
+fn exact_go_cache_exclusion_is_applied_before_inventory() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    write_default_go_caches(fixture.path());
+    let build = fixture.path().join("Library/Caches/go-build");
+    let output = cargo_bin_cmd!("sizetrail")
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-homebrew",
+            "--no-docker",
+            "--exclude",
+        ])
+        .arg(&build)
+        .arg("--root")
+        .arg(fixture.path())
+        .env("SIZETRAIL_NO_GO_PROBE", "1")
+        .output()
+        .expect("Go exclusion scan must run");
+
+    assert!(
+        matches!(output.status.code(), Some(0 | 3)),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: Value =
+        serde_json::from_slice(&output.stdout).expect("scan must emit one JSON document");
+    assert!(
+        document["payload"]["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .all(|finding| finding["rule_id"] != "go.build_cache")
+    );
+    assert!(
+        document["payload"]["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| finding["rule_id"] == "go.module_cache")
+    );
+    assert!(
+        document["payload"]["coverage_gaps"]
+            .as_array()
+            .expect("coverage gaps")
+            .iter()
+            .any(|gap| gap["region"] == "go" && gap["reason"] == "excluded_by_user")
+    );
+}
+
+#[test]
+fn live_explain_rescans_only_the_go_owner() {
+    let fixture = tempfile::tempdir().expect("fixture root must be created");
+    write_default_go_caches(fixture.path());
+    let scan = cargo_bin_cmd!("sizetrail")
+        .args([
+            "scan",
+            "--json",
+            "--no-xcode",
+            "--no-homebrew",
+            "--no-docker",
+            "--root",
+        ])
+        .arg(fixture.path())
+        .env("SIZETRAIL_NO_GO_PROBE", "1")
+        .output()
+        .expect("Go cache scan must run");
+    let document: Value =
+        serde_json::from_slice(&scan.stdout).expect("scan must emit one JSON document");
+    let id = document["payload"]["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .find(|finding| finding["rule_id"] == "go.build_cache")
+        .and_then(|finding| finding["id"].as_str())
+        .expect("build cache finding must have an id");
+
+    let explain = cargo_bin_cmd!("sizetrail")
+        .args(["explain", id, "--json", "--root"])
+        .arg(fixture.path())
+        .env("SIZETRAIL_NO_XCODE_PROBE", "1")
+        .env("SIZETRAIL_NO_GO_PROBE", "1")
+        .output()
+        .expect("live explain must run");
+
+    assert_eq!(
+        explain.status.code(),
+        Some(0),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&explain.stdout),
+        String::from_utf8_lossy(&explain.stderr)
+    );
+    let explanation: Value =
+        serde_json::from_slice(&explain.stdout).expect("explain must emit JSON");
+    assert_eq!(explanation["provenance"], "live");
+    assert_eq!(explanation["finding"]["id"], id);
+    assert_eq!(explanation["finding"]["rule_id"], "go.build_cache");
 }

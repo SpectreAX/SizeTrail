@@ -156,7 +156,7 @@ fn homebrew_rules_cover_only_the_eight_decided_store_classes() {
         .iter()
         .filter(|rule| rule.adapter == "homebrew")
         .collect::<Vec<_>>();
-    assert_eq!(COMPILED_ADAPTER_IDS, ["docker", "homebrew", "xcode"]);
+    assert_eq!(COMPILED_ADAPTER_IDS, ["docker", "go", "homebrew", "xcode"]);
     assert_eq!(
         homebrew
             .iter()

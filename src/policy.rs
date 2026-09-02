@@ -48,6 +48,23 @@ pub const XCODE_SIMCTL_RUNTIMES: ProbeId = ProbeId::new("xcode.simctl_runtimes")
 pub const DOCKER_CONTEXT_INSPECT: ProbeId = ProbeId::new("docker.context_inspect");
 pub const DOCKER_VERSION: ProbeId = ProbeId::new("docker.version");
 pub const DOCKER_SYSTEM_DF: ProbeId = ProbeId::new("docker.system_df");
+pub const GO_HOMEBREW_VERSION: ProbeId = ProbeId::new("go.homebrew_version");
+pub const GO_PKG_VERSION: ProbeId = ProbeId::new("go.pkg_version");
+const GO_PROBE_ENVIRONMENT: &[(&str, &str)] =
+    &[("LANG", "C"), ("LC_ALL", "C"), ("HOME", "/var/empty")];
+const GO_REMOVED_ENVIRONMENT: &[&str] = &[
+    "GOCACHE",
+    "GOMODCACHE",
+    "GOPATH",
+    "GOROOT",
+    "GOENV",
+    "GOTMPDIR",
+    "GOTOOLCHAIN",
+    "GOFLAGS",
+    "GOTELEMETRY",
+    "GOTELEMETRYDIR",
+];
+const GO_VERSION_SIDE_EFFECTS: &[&str] = &["go_version_writes_local_telemetry_under_process_home"];
 
 const XCODE_PROBE_ENVIRONMENT: &[(&str, &str)] = &[("LANG", "C"), ("LC_ALL", "C")];
 const XCODE_REMOVED_ENVIRONMENT: &[&str] = &[
@@ -205,6 +222,32 @@ pub const SIDE_EFFECT_REGISTRY: &[ProbePolicy] = &[
             environment: DOCKER_PROBE_ENVIRONMENT,
             remove_environment: DOCKER_REMOVED_ENVIRONMENT,
             timeout_millis: 120_000,
+        },
+    },
+    ProbePolicy {
+        id: GO_HOMEBREW_VERSION,
+        max_calls_per_scan: 1,
+        disable_env: "SIZETRAIL_NO_GO_PROBE",
+        known_side_effects: GO_VERSION_SIDE_EFFECTS,
+        command: ReadOnlyCommand {
+            program: "/opt/homebrew/bin/go",
+            arguments: &["version"],
+            environment: GO_PROBE_ENVIRONMENT,
+            remove_environment: GO_REMOVED_ENVIRONMENT,
+            timeout_millis: 10_000,
+        },
+    },
+    ProbePolicy {
+        id: GO_PKG_VERSION,
+        max_calls_per_scan: 1,
+        disable_env: "SIZETRAIL_NO_GO_PROBE",
+        known_side_effects: GO_VERSION_SIDE_EFFECTS,
+        command: ReadOnlyCommand {
+            program: "/usr/local/go/bin/go",
+            arguments: &["version"],
+            environment: GO_PROBE_ENVIRONMENT,
+            remove_environment: GO_REMOVED_ENVIRONMENT,
+            timeout_millis: 10_000,
         },
     },
 ];
@@ -502,7 +545,7 @@ mod tests {
             DOCKER_REMOVED_ENVIRONMENT, DOCKER_SYSTEM_DF, DOCKER_VERSION,
         };
 
-        assert_eq!(SIDE_EFFECT_REGISTRY.len(), 9);
+        assert_eq!(SIDE_EFFECT_REGISTRY.len(), 11);
         assert_eq!(SIDE_EFFECT_REGISTRY[6].id, DOCKER_CONTEXT_INSPECT);
         assert_eq!(SIDE_EFFECT_REGISTRY[7].id, DOCKER_VERSION);
         assert_eq!(SIDE_EFFECT_REGISTRY[8].id, DOCKER_SYSTEM_DF);
@@ -521,7 +564,7 @@ mod tests {
         assert_eq!(SIDE_EFFECT_REGISTRY[6].command.timeout_millis, 10_000);
         assert_eq!(SIDE_EFFECT_REGISTRY[7].command.timeout_millis, 15_000);
         assert_eq!(SIDE_EFFECT_REGISTRY[8].command.timeout_millis, 120_000);
-        for policy in &SIDE_EFFECT_REGISTRY[6..] {
+        for policy in &SIDE_EFFECT_REGISTRY[6..9] {
             assert_eq!(policy.max_calls_per_scan, 1);
             assert_eq!(policy.command.program, DOCKER_BINARY);
             assert_eq!(policy.command.environment, DOCKER_PROBE_ENVIRONMENT);
@@ -545,6 +588,30 @@ mod tests {
                 "docker_system_df_traverses_daemon_storage"
             ]
         );
+        assert_eq!(SIDE_EFFECT_REGISTRY[9].id, super::GO_HOMEBREW_VERSION);
+        assert_eq!(SIDE_EFFECT_REGISTRY[10].id, super::GO_PKG_VERSION);
+        assert_eq!(
+            SIDE_EFFECT_REGISTRY[9].command.program,
+            "/opt/homebrew/bin/go"
+        );
+        assert_eq!(
+            SIDE_EFFECT_REGISTRY[10].command.program,
+            "/usr/local/go/bin/go"
+        );
+        for policy in &SIDE_EFFECT_REGISTRY[9..] {
+            assert_eq!(policy.command.arguments, ["version"]);
+            assert_eq!(policy.max_calls_per_scan, 1);
+            assert_eq!(policy.disable_env, "SIZETRAIL_NO_GO_PROBE");
+            assert_eq!(policy.command.environment, super::GO_PROBE_ENVIRONMENT);
+            assert_eq!(
+                policy.command.remove_environment,
+                super::GO_REMOVED_ENVIRONMENT
+            );
+            assert_eq!(
+                policy.known_side_effects,
+                ["go_version_writes_local_telemetry_under_process_home"]
+            );
+        }
     }
 
     #[test]

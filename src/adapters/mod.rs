@@ -6,6 +6,7 @@ use crate::model::{Advice, Finding, FindingSubject, Measurement, SignalObservati
 use crate::policy::PolicyCtx;
 
 pub mod docker;
+pub mod go;
 pub mod homebrew;
 mod store;
 pub mod xcode;
